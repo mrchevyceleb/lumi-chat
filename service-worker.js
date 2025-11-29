@@ -1,9 +1,8 @@
 
-const CACHE_NAME = 'lumi-chat-v2';
+const CACHE_NAME = 'lumi-chat-v3';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
-  'https://cdn.tailwindcss.com',
   'https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap'
 ];
 

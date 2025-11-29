@@ -49,9 +49,11 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({ onLoginSuccess }) => {
 
       <div className="w-full max-w-md bg-white/70 dark:bg-slate-800/70 backdrop-blur-xl border border-white dark:border-slate-700 shadow-2xl rounded-3xl p-8 relative z-10 animate-fade-in-up">
         <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-gradient-to-tr from-indigo-500 to-purple-600 rounded-2xl mx-auto flex items-center justify-center text-3xl shadow-lg mb-4">
-            ✨
-          </div>
+          <img 
+            src="https://xcjqilfhlwbykckzdzry.supabase.co/storage/v1/object/public/images/50ad6e29-e72e-4158-b9cf-486ab30c64c5/d7a6feb7-13c3-4823-84ef-913e89786d2d.png" 
+            alt="Lumi" 
+            className="w-20 h-20 mx-auto rounded-2xl shadow-lg mb-4"
+          />
           <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent mb-2">
             Lumi Chat
           </h1>
