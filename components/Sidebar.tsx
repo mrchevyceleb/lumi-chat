@@ -338,11 +338,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         className={`
           fixed md:relative z-40 h-full flex flex-col group/sidebar
           bg-white/95 md:bg-white/80 dark:bg-[#020617]/80 backdrop-blur-xl border-r border-white/40 dark:border-white/5 shadow-2xl md:shadow-none
-          w-[85vw] max-w-[320px] md:w-auto
+          w-[85vw] max-w-[320px]
           ${isResizing ? '' : 'transition-all duration-300'} 
-          ${isOpen ? 'translate-x-0 opacity-100' : '-translate-x-full md:translate-x-0 md:w-0 md:opacity-0 md:overflow-hidden'}
+          ${isOpen ? 'translate-x-0 opacity-100' : '-translate-x-full md:translate-x-0 md:!w-0 md:min-w-0 md:opacity-0 md:overflow-hidden md:p-0 md:border-0'}
         `}
-        style={{ width: isOpen && isDesktop ? sidebarWidth : undefined }}
+        style={{ width: isOpen && isDesktop ? sidebarWidth : (isDesktop ? 0 : undefined) }}
       >
         
         {/* Resize Handle (Desktop Only) */}
