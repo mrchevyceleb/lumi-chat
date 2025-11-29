@@ -20,6 +20,7 @@ interface SidebarProps {
   onNewChatInFolder: (folderId: string) => void;
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
+  onOpenVault: () => void;
 }
 
 // Extracted ChatItem component to prevent re-mounting issues
@@ -158,7 +159,7 @@ const ChatItem: React.FC<{
 export const Sidebar: React.FC<SidebarProps> = ({
   chats, folders, personas, activeChatId, onSelectChat, onNewChat, onCreateFolder,
   onMoveChat, onDeleteChat, onRenameChat, onTogglePin, onOpenSettings,
-  onRenameFolder, onDeleteFolder, onNewChatInFolder, isOpen, setIsOpen
+  onRenameFolder, onDeleteFolder, onNewChatInFolder, isOpen, setIsOpen, onOpenVault
 }) => {
   // State for creating/renaming folders and chats
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
@@ -362,6 +363,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </h1>
           </div>
           <div className="flex gap-2">
+            <button 
+              type="button"
+              onClick={onOpenVault}
+              className="p-2 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg text-gray-500 dark:text-gray-400 transition-colors"
+              title="Open Vault"
+            >
+              <span className="text-lg">⚡</span>
+            </button>
             <button 
               type="button"
               onClick={onOpenSettings}

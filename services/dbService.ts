@@ -1,6 +1,6 @@
 
 import { supabase } from './supabaseClient';
-import { ChatSession, Message, Folder, Persona } from '../types';
+import { ChatSession, Message, Folder, Persona, VaultFolder, VaultItem } from '../types';
 
 export interface UsageStats {
     inputTokens: number;
@@ -287,5 +287,103 @@ export const dbService = {
     
     const { error } = await supabase.from('messages').update(payload).eq('id', messageId);
     if (error) logError("Update message error", error);
+  },
+
+  // --- Vault ---
+  async getVaultFolders(): Promise<VaultFolder[]> {
+    const { data, error } = await supabase
+      .from('vault_folders')
+      .select('*')
+      .order('created_at', { ascending: true });
+    
+    if (error) {
+      logError("Error fetching vault folders", error);
+      return [];
+    }
+    
+    return (data || []).map(f => ({
+      id: f.id,
+      name: f.name,
+      createdAt: toTimestamp(f.created_at)
+    }));
+  },
+
+  async createVaultFolder(name: string): Promise<VaultFolder | null> {
+    const { data, error } = await supabase
+      .from('vault_folders')
+      .insert([{ name }])
+      .select()
+      .single();
+    
+    if (error) {
+      logError("Create vault folder error", error);
+      return null;
+    }
+    
+    return {
+      id: data.id,
+      name: data.name,
+      createdAt: toTimestamp(data.created_at)
+    };
+  },
+
+  async getVaultItems(folderId?: string): Promise<VaultItem[]> {
+    let query = supabase.from('vault_items').select('*').order('created_at', { ascending: false });
+    
+    if (folderId) {
+      query = query.eq('folder_id', folderId);
+    }
+    
+    const { data, error } = await query;
+    
+    if (error) {
+      logError("Error fetching vault items", error);
+      return [];
+    }
+    
+    return (data || []).map(i => ({
+      id: i.id,
+      folderId: i.folder_id,
+      content: i.content,
+      sourceContext: i.source_context,
+      createdAt: toTimestamp(i.created_at),
+      isPinned: i.is_pinned || false
+    }));
+  },
+
+  async saveVaultItem(item: VaultItem): Promise<void> {
+    const { error } = await supabase.from('vault_items').insert([{
+      id: item.id,
+      folder_id: item.folderId,
+      content: item.content,
+      source_context: item.sourceContext,
+      created_at: new Date(item.createdAt).toISOString(),
+      is_pinned: item.isPinned
+    }]);
+    
+    if (error) logError("Save vault item error", error);
+  },
+
+  async toggleVaultItemPin(itemId: string, isPinned: boolean): Promise<void> {
+    const { error } = await supabase
+      .from('vault_items')
+      .update({ is_pinned: isPinned })
+      .eq('id', itemId);
+    
+    if (error) logError("Toggle vault item pin error", error);
+  },
+
+  async moveVaultItem(itemId: string, folderId: string | null): Promise<void> {
+    const { error } = await supabase
+      .from('vault_items')
+      .update({ folder_id: folderId })
+      .eq('id', itemId);
+    
+    if (error) logError("Move vault item error", error);
+  },
+
+  async deleteVaultItem(itemId: string): Promise<void> {
+    const { error } = await supabase.from('vault_items').delete().eq('id', itemId);
+    if (error) logError("Delete vault item error", error);
   }
 };

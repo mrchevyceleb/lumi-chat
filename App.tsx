@@ -13,6 +13,8 @@ import { dbService, UsageStats } from './services/dbService';
 import { ragService } from './services/ragService'; // Import RAG Service
 import { AuthOverlay } from './components/AuthOverlay';
 import { SettingsModal } from './components/SettingsModal';
+import { VaultCapture } from './components/VaultCapture';
+import { VaultModal } from './components/VaultModal';
 
 // Mock data initialization
 const INITIAL_PERSONAS = [DEFAULT_PERSONA, CODING_PERSONA];
@@ -56,7 +58,6 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('lumi_dark_mode');
     return saved === 'true';
   });
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Voice State (Settings)
   const [voiceName, setVoiceName] = useState(() => {
@@ -145,6 +146,8 @@ const App: React.FC = () => {
   });
 
   const [isLiveMode, setIsLiveMode] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isVaultOpen, setIsVaultOpen] = useState(false);
 
   // --- Refs ---
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -782,6 +785,7 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-[100dvh] w-full bg-[#eef2f9] dark:bg-[#020617] text-slate-800 dark:text-slate-100 font-sans relative overflow-hidden transition-colors duration-500">
+      <VaultCapture />
       <LiveSessionOverlay 
         isOpen={isLiveMode} 
         onClose={() => setIsLiveMode(false)} 
@@ -802,6 +806,11 @@ const App: React.FC = () => {
         usageStats={usageStats}
       />
 
+      <VaultModal 
+        isOpen={isVaultOpen} 
+        onClose={() => setIsVaultOpen(false)} 
+      />
+
       <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
          {/* Brighter, more atmospheric nebula blobs for dark mode */}
          <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] bg-purple-200 dark:bg-purple-600/20 rounded-full mix-blend-multiply dark:mix-blend-screen filter blur-3xl opacity-60 animate-blob"></div>
@@ -816,6 +825,7 @@ const App: React.FC = () => {
         onTogglePin={handleTogglePin} onRenameFolder={handleRenameFolder} onDeleteFolder={handleDeleteFolder}
         onNewChatInFolder={(fid) => createNewChat(undefined, fid)} isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenVault={() => setIsVaultOpen(true)}
       />
 
       <div className="flex-1 flex flex-col z-10 h-full relative min-w-0">

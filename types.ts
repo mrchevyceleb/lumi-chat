@@ -25,6 +25,21 @@ export interface Folder {
   name: string;
 }
 
+export interface VaultFolder {
+  id: string;
+  name: string;
+  createdAt: number;
+}
+
+export interface VaultItem {
+  id: string;
+  folderId: string | null;
+  content: string;
+  sourceContext?: string;
+  createdAt: number;
+  isPinned: boolean;
+}
+
 export interface Persona {
   id: string;
   name: string;
