@@ -875,7 +875,7 @@ const App: React.FC = () => {
           <div className="absolute inset-0 overflow-y-auto p-4 md:p-8 space-y-4" ref={chatContainerRef} onScroll={handleScroll}>
              {!activeChat ? (
                <div className="h-full flex flex-col items-center justify-center opacity-80 mt-[-50px]">
-                  <div className="w-24 h-24 bg-white/50 dark:bg-white/5 rounded-full flex items-center justify-center mb-6 shadow-xl backdrop-blur-md animate-bounce-slow border border-white/20 dark:border-white/10"><span className="text-5xl">✨</span></div>
+                  <div className="w-24 h-24 bg-white/50 dark:bg-white/5 rounded-full flex items-center justify-center mb-6 shadow-xl backdrop-blur-md animate-bounce-slow border border-white/20 dark:border-white/10"><img src="https://xcjqilfhlwbykckzdzry.supabase.co/storage/v1/object/public/images/50ad6e29-e72e-4158-b9cf-486ab30c64c5/d7a6feb7-13c3-4823-84ef-913e89786d2d.png" alt="Lumi" className="w-16 h-16 object-contain" /></div>
                   <h1 className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-indigo-600 to-pink-500 bg-clip-text text-transparent mb-3 text-center drop-shadow-sm">How can I help you?</h1>
                   <p className="text-gray-500 dark:text-gray-400 text-center max-w-md">I can help you write code, brainstorm ideas, translate languages, and much more.</p>
                </div>
