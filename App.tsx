@@ -45,7 +45,10 @@ const App: React.FC = () => {
 
   const [openTabs, setOpenTabs] = useState<string[]>([]); // New: Track open tabs
 
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  // Default sidebar closed on mobile for cleaner UX
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
+    return window.innerWidth >= 768;
+  });
   const [isLoadingData, setIsLoadingData] = useState(false);
   
   // Theme State
@@ -817,28 +820,28 @@ const App: React.FC = () => {
 
       <div className="flex-1 flex flex-col z-10 h-full relative min-w-0">
         
-        {/* Top Bar */}
-        <div className="relative z-20 h-16 flex items-center justify-between px-4 md:px-6 bg-white/30 dark:bg-[#0f172a]/40 backdrop-blur-md flex-shrink-0 border-b border-white/40 dark:border-white/5">
+        {/* Top Bar - Compact on mobile */}
+        <div className="relative z-20 h-12 md:h-14 flex items-center justify-between px-3 md:px-6 bg-white/30 dark:bg-[#0f172a]/40 backdrop-blur-md flex-shrink-0 border-b border-white/40 dark:border-white/5">
            <div className="flex items-center gap-2 md:gap-3 min-w-0">
-             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-500 hover:text-indigo-600 transition-colors mr-1">
-               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
+             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-500 hover:text-indigo-600 transition-colors">
+               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5 md:w-6 md:h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
              </button>
-             <h2 className="font-bold text-gray-800 dark:text-white truncate">
-                {activeChat ? activeChat.title : 'Welcome to Lumi'}
-                {isLoadingData && <span className="text-xs font-normal text-indigo-500 ml-2 animate-pulse">(Syncing...)</span>}
+             <h2 className="font-bold text-gray-800 dark:text-white truncate text-sm md:text-base max-w-[180px] md:max-w-none">
+                {activeChat ? activeChat.title : 'Lumi'}
+                {isLoadingData && <span className="hidden md:inline text-xs font-normal text-indigo-500 ml-2 animate-pulse">(Syncing...)</span>}
              </h2>
            </div>
            
-           <div className="flex items-center gap-2 md:gap-3 flex-shrink-0">
-             <button onClick={() => setIsLiveMode(true)} className="p-2 rounded-full bg-gradient-to-r from-red-500 to-pink-500 text-white shadow-lg shadow-pink-500/20 hover:scale-110 transition-transform animate-pulse-fast" title="Start Live Voice Chat">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" /></svg>
+           <div className="flex items-center gap-2 flex-shrink-0">
+             <button onClick={() => setIsLiveMode(true)} className="p-2 rounded-full bg-gradient-to-r from-red-500 to-pink-500 text-white shadow-lg shadow-pink-500/20 hover:scale-105 active:scale-95 transition-transform" title="Start Live Voice Chat">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 md:w-5 md:h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" /></svg>
              </button>
            </div>
         </div>
 
-        {/* Tabs */}
+        {/* Tabs - Hidden on mobile for cleaner UX */}
         {openTabs.length > 0 && (
-          <div className="flex items-center gap-1.5 px-3 pt-2 bg-gray-50/50 dark:bg-[#0B1120]/50 border-b border-gray-200 dark:border-white/5 overflow-x-auto custom-scrollbar-hide z-10 h-10 flex-shrink-0">
+          <div className="hidden md:flex items-center gap-1.5 px-3 pt-2 bg-gray-50/50 dark:bg-[#0B1120]/50 border-b border-gray-200 dark:border-white/5 overflow-x-auto custom-scrollbar-hide z-10 h-10 flex-shrink-0">
              {openTabs.map(tabId => {
                const chat = chats.find(c => c.id === tabId);
                if (!chat) return null;

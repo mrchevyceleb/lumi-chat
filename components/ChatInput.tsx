@@ -269,14 +269,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   </div>
                 )}
 
-                <div className="flex items-end gap-1.5 md:gap-2 p-1.5 md:p-2">
-                   {/* Attachment Button */}
+                <div className="flex items-end gap-1 md:gap-2 p-1.5 md:p-2">
+                   {/* Attachment Button - Always visible */}
                    <button 
                      onClick={() => fileInputRef.current?.click()}
                      className="p-2 md:p-3 text-gray-400 hover:text-indigo-500 transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-slate-700"
                      title="Attach file (Image or Zip)"
                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5 md:w-6 md:h-6">
                         <path strokeLinecap="round" strokeLinejoin="round" d="m18.375 12.739-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l10.94-10.94A3 3 0 1 1 19.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 0 0 2.112 2.13" />
                       </svg>
                    </button>
@@ -288,10 +288,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                      onChange={handleFileUpload} 
                    />
 
-                   {/* Code Snippet Button */}
+                   {/* Code Snippet Button - Hidden on mobile */}
                    <button 
                      onClick={() => setShowSnippetModal(true)}
-                     className="p-2 md:p-3 text-gray-400 hover:text-indigo-500 transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-slate-700"
+                     className="hidden md:block p-2 md:p-3 text-gray-400 hover:text-indigo-500 transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-slate-700"
                      title="Add Code Snippet"
                    >
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
@@ -299,10 +299,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       </svg>
                    </button>
 
-                   {/* Google Search Toggle */}
+                   {/* Google Search Toggle - Hidden on mobile */}
                    <button 
                      onClick={() => setUseSearch(!useSearch)}
-                     className={`p-2 md:p-3 transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 ${useSearch ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500'}`}
+                     className={`hidden md:block p-2 md:p-3 transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 ${useSearch ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500'}`}
                      title="Toggle Google Search"
                    >
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
@@ -320,14 +320,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                        }
                      }}
                      placeholder={isListening ? "Listening..." : `Message ${currentPersona.name}...`}
-                     className="flex-1 bg-transparent border-none outline-none resize-none py-3 max-h-32 text-gray-700 dark:text-gray-200 placeholder-gray-400"
+                     className="flex-1 bg-transparent border-none outline-none resize-none py-2 md:py-3 max-h-32 text-gray-700 dark:text-gray-200 placeholder-gray-400 text-sm md:text-base"
                      rows={1}
                    />
 
-                   {/* Voice Input */}
+                   {/* Voice Input - Hidden on mobile (use Live mode instead) */}
                    <button 
                      onClick={handleVoiceInput}
-                     className={`p-2 md:p-3 rounded-full transition-all ${isListening ? 'bg-red-500 text-white animate-pulse' : 'text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-slate-700'}`}
+                     className={`hidden md:block p-2 md:p-3 rounded-full transition-all ${isListening ? 'bg-red-500 text-white animate-pulse' : 'text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-slate-700'}`}
                      title="Voice Input"
                    >
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
@@ -360,19 +360,19 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 </div>
              </div>
              
-             {/* Footer Controls */}
-             <div className="flex flex-col items-center gap-2 mt-2 md:mt-3">
-               <div className="flex flex-wrap justify-center items-center gap-2">
+             {/* Footer Controls - Simplified on mobile */}
+             <div className="flex flex-col items-center gap-1 md:gap-2 mt-1 md:mt-3">
+               <div className="flex flex-wrap justify-center items-center gap-1.5 md:gap-2">
                    
-                   {/* Persona Selector */}
+                   {/* Persona Selector - Compact on mobile */}
                    <div className="relative" ref={personaMenuRef}>
                      <button
                        onClick={() => setShowPersonaMenu(!showPersonaMenu)}
-                       className={`flex items-center gap-1.5 bg-gray-100 dark:bg-slate-700/50 rounded-full pl-2 pr-3 py-1 border border-gray-200 dark:border-slate-600 text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-slate-600 transition-colors`}
+                       className={`flex items-center gap-1 md:gap-1.5 bg-gray-100 dark:bg-slate-700/50 rounded-full pl-2 pr-2 md:pr-3 py-1 border border-gray-200 dark:border-slate-600 text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-slate-600 transition-colors`}
                      >
                        <span className="text-sm">{currentPersona.avatar}</span>
-                       <span className="max-w-[80px] md:max-w-xs truncate">{currentPersona.name}</span>
-                       <span className="opacity-50">▼</span>
+                       <span className="hidden md:inline max-w-xs truncate">{currentPersona.name}</span>
+                       <span className="opacity-50 text-[10px] md:text-xs">▼</span>
                      </button>
                      
                      {showPersonaMenu && (
@@ -414,8 +414,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                      )}
                    </div>
 
-                   {/* Model Selector */}
-                   <div className="relative" ref={modelMenuRef}>
+                   {/* Model Selector - Hidden on mobile */}
+                   <div className="relative hidden md:block" ref={modelMenuRef}>
                       <button 
                         onClick={() => setShowModelMenu(!showModelMenu)}
                         className="flex items-center gap-1.5 bg-gray-100 dark:bg-slate-700/50 rounded-full px-3 py-1 border border-gray-200 dark:border-slate-600 text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-slate-600 transition-colors"
@@ -448,8 +448,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       )}
                    </div>
 
-                   {/* Other Controls */}
-                   <div className="flex items-center bg-gray-100 dark:bg-slate-700/50 rounded-full p-1 border border-gray-200 dark:border-slate-600">
+                   {/* Response Length - Hidden on mobile */}
+                   <div className="hidden md:flex items-center bg-gray-100 dark:bg-slate-700/50 rounded-full p-1 border border-gray-200 dark:border-slate-600">
                       <button 
                         onClick={() => setResponseLength('concise')}
                         className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${responseLength === 'concise' ? 'bg-white dark:bg-slate-600 shadow-sm text-indigo-600 dark:text-indigo-300' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}
