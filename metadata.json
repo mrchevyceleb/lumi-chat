@@ -1,0 +1,7 @@
+{
+  "name": "Lumi Chat",
+  "description": "A magical, friendly, and powerful AI companion with persona management and project organization.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

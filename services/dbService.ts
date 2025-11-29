@@ -1,0 +1,291 @@
+
+import { supabase } from './supabaseClient';
+import { ChatSession, Message, Folder, Persona } from '../types';
+
+export interface UsageStats {
+    inputTokens: number;
+    outputTokens: number;
+    modelBreakdown: Record<string, { input: number; output: number }>;
+}
+
+// Helper to ensure timestamp is always a BigInt-compatible number
+const toTimestamp = (val: string | number | Date): number => {
+    if (val instanceof Date) return val.getTime();
+    if (typeof val === 'number') return Math.floor(val);
+    if (typeof val === 'string') {
+        const parsed = new Date(val).getTime();
+        return isNaN(parsed) ? Date.now() : parsed;
+    }
+    return Date.now();
+};
+
+const logError = (context: string, error: any) => {
+    console.error(`${context}:`, error?.message || error || "Unknown error");
+};
+
+export const dbService = {
+  
+  // --- Usage Stats ---
+  async getUsageStats(): Promise<UsageStats> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { inputTokens: 0, outputTokens: 0, modelBreakdown: {} };
+
+    try {
+        const { data, error } = await supabase
+        .from('user_usage')
+        .select('input_tokens, output_tokens, model_stats') 
+        .eq('user_id', user.id)
+        .single();
+
+        if (error) {
+            if (error.code !== 'PGRST116') {
+                logError("Usage stats not available", error);
+            }
+            return { inputTokens: 0, outputTokens: 0, modelBreakdown: {} };
+        }
+
+        if (data) {
+            return { 
+                inputTokens: Number(data.input_tokens || 0), 
+                outputTokens: Number(data.output_tokens || 0),
+                modelBreakdown: data.model_stats || {} 
+            };
+        }
+    } catch (e) {
+        logError("Usage stats exception", e);
+        return { inputTokens: 0, outputTokens: 0, modelBreakdown: {} };
+    }
+
+    return { inputTokens: 0, outputTokens: 0, modelBreakdown: {} };
+  },
+
+  async updateUsageStats(inputTokens: number, outputTokens: number, modelId?: string): Promise<void> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    try {
+        // First fetch current stats to merge
+        const { data: currentData } = await supabase
+            .from('user_usage')
+            .select('input_tokens, output_tokens, model_stats')
+            .eq('user_id', user.id)
+            .single();
+        
+        let newTotalInput = inputTokens;
+        let newTotalOutput = outputTokens;
+        let newModelStats: Record<string, { input: number; output: number }> = {};
+
+        if (currentData) {
+            newTotalInput = Number(currentData.input_tokens || 0) + inputTokens;
+            newTotalOutput = Number(currentData.output_tokens || 0) + outputTokens;
+            newModelStats = currentData.model_stats || {};
+        }
+
+        if (modelId) {
+            if (!newModelStats[modelId]) {
+                newModelStats[modelId] = { input: 0, output: 0 };
+            }
+            newModelStats[modelId].input += inputTokens;
+            newModelStats[modelId].output += outputTokens;
+        }
+
+        const { error } = await supabase
+        .from('user_usage')
+        .upsert({ 
+            user_id: user.id, 
+            input_tokens: newTotalInput, 
+            output_tokens: newTotalOutput,
+            model_stats: newModelStats,
+            last_updated: new Date().toISOString() 
+        });
+        
+        if (error) {
+            logError("Could not update usage stats", error);
+        }
+    } catch (e) {
+        logError("Usage stats update failed silently", e);
+    }
+  },
+
+  // --- Folders ---
+  async getFolders(): Promise<Folder[]> {
+    const { data, error } = await supabase.from('folders').select('*').order('created_at', { ascending: true });
+    if (error) {
+        logError("Error fetching folders", error);
+        return [];
+    }
+    return data || [];
+  },
+
+  async createFolder(name: string): Promise<Folder | null> {
+    const { data, error } = await supabase.from('folders').insert([{ name }]).select().single();
+    if (error) {
+        logError("Create folder error", error);
+        return null;
+    }
+    return data;
+  },
+
+  async renameFolder(folderId: string, newName: string): Promise<void> {
+    const { error } = await supabase.from('folders').update({ name: newName }).eq('id', folderId);
+    if (error) logError("Rename folder error", error);
+  },
+
+  async deleteFolder(folderId: string): Promise<void> {
+    // Unlink chats first (Move to Recent)
+    const { error: unlinkError } = await supabase
+        .from('chats')
+        .update({ folder_id: null })
+        .eq('folder_id', folderId);
+    
+    if (unlinkError) logError("Error unlinking chats from folder", unlinkError);
+
+    const { error } = await supabase.from('folders').delete().eq('id', folderId);
+    if (error) logError("Delete folder error", error);
+  },
+
+  // --- Personas ---
+  async getPersonas(): Promise<Persona[]> {
+    const { data, error } = await supabase.from('personas').select('*').order('created_at', { ascending: true });
+    if (error) {
+        logError("Error fetching personas", error);
+        return [];
+    }
+    
+    return (data || []).map(p => ({
+        id: p.id,
+        name: p.name,
+        avatar: p.avatar,
+        systemInstruction: p.system_instruction,
+        description: p.description,
+        color: p.color
+    }));
+  },
+
+  async savePersona(persona: Persona): Promise<void> {
+    const payload = {
+        id: persona.id,
+        name: persona.name,
+        avatar: persona.avatar,
+        system_instruction: persona.systemInstruction,
+        description: persona.description,
+        color: persona.color
+    };
+    
+    const { error } = await supabase.from('personas').upsert(payload);
+    if (error) logError("Save persona error", error);
+  },
+
+  async deletePersona(personaId: string): Promise<void> {
+    const { error } = await supabase.from('personas').delete().eq('id', personaId);
+    if (error) logError("Delete persona error", error);
+  },
+
+  // --- Chats ---
+  async getChats(): Promise<ChatSession[]> {
+    const { data: chatsData, error: chatsError } = await supabase
+        .from('chats')
+        .select('*')
+        .order('last_updated', { ascending: false });
+
+    if (chatsError) {
+        logError("Error fetching chats", chatsError);
+        throw chatsError;
+    }
+    if (!chatsData || chatsData.length === 0) return [];
+
+    const { data: messagesData, error: msgsError } = await supabase
+        .from('messages')
+        .select('*')
+        .order('timestamp', { ascending: true });
+
+    if (msgsError) logError("Error fetching messages", msgsError);
+
+    return chatsData.map(c => {
+        const chatMsgs = (messagesData || [])
+            .filter(m => m.chat_id === c.id)
+            .map(m => ({
+                id: m.id,
+                role: m.role as 'user' | 'model',
+                content: m.content,
+                timestamp: toTimestamp(m.timestamp),
+                type: m.type as 'text' | 'image' | 'audio',
+                groundingUrls: m.grounding_urls,
+                model: m.model
+            }));
+
+        return {
+            id: c.id,
+            title: c.title,
+            folderId: c.folder_id || undefined,
+            isPinned: c.is_pinned,
+            personaId: c.persona_id,
+            lastUpdated: toTimestamp(c.last_updated),
+            messages: chatMsgs
+        };
+    });
+  },
+
+  async createChat(chat: ChatSession): Promise<void> {
+    const { error } = await supabase.from('chats').insert([{
+        id: chat.id,
+        title: chat.title,
+        folder_id: chat.folderId || null,
+        is_pinned: chat.isPinned,
+        persona_id: chat.personaId,
+        last_updated: toTimestamp(chat.lastUpdated)
+    }]);
+    if (error) logError("Create chat error", error);
+  },
+
+  async updateChat(chatId: string, updates: Partial<ChatSession>): Promise<void> {
+    const payload: any = {};
+    if (updates.title !== undefined) payload.title = updates.title;
+    if (updates.isPinned !== undefined) payload.is_pinned = updates.isPinned;
+    if (updates.folderId !== undefined) payload.folder_id = updates.folderId || null;
+    
+    if (updates.lastUpdated !== undefined) {
+        payload.last_updated = toTimestamp(updates.lastUpdated);
+    }
+    
+    if (updates.personaId !== undefined) payload.persona_id = updates.personaId;
+
+    const { error } = await supabase.from('chats').update(payload).eq('id', chatId);
+    if (error) logError("Update chat error", error);
+  },
+
+  async deleteChat(chatId: string): Promise<void> {
+    await supabase.from('messages').delete().eq('chat_id', chatId);
+
+    const { error } = await supabase.from('chats').delete().eq('id', chatId);
+    if (error) logError("Delete chat error", error);
+  },
+
+  // --- Messages ---
+  async addMessage(chatId: string, message: Message): Promise<void> {
+    const messagePayload: any = {
+        id: message.id,
+        chat_id: chatId,
+        role: message.role,
+        content: message.content,
+        timestamp: toTimestamp(message.timestamp), 
+        type: message.type || 'text',
+        grounding_urls: message.groundingUrls || [],
+    };
+    
+    if (message.model) {
+        messagePayload.model = message.model;
+    }
+
+    const { error } = await supabase.from('messages').insert([messagePayload]);
+    if (error) logError("Add message error", error);
+  },
+  
+  async updateMessageContent(messageId: string, content: string, groundingUrls?: any[]): Promise<void> {
+    const payload: any = { content };
+    if (groundingUrls) payload.grounding_urls = groundingUrls;
+    
+    const { error } = await supabase.from('messages').update(payload).eq('id', messageId);
+    if (error) logError("Update message error", error);
+  }
+};
