@@ -1,8 +1,9 @@
 steps:
-  # Build the container image
+  # Build the container image (--no-cache ensures fresh build)
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
+      - '--no-cache'
       - '-t'
       - 'gcr.io/$PROJECT_ID/lumi-chat:$COMMIT_SHA'
       - '-t'
