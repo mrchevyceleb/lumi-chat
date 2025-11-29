@@ -16,6 +16,8 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
 
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+
   useEffect(() => {
     if (isOpen) {
       loadData();
@@ -57,11 +59,12 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
   };
 
   const handleCreateFolder = async () => {
-      const name = prompt("Folder Name:");
-      if (name) {
-          await dbService.createVaultFolder(name);
-          loadData();
-      }
+    if (newFolderName.trim()) {
+        await dbService.createVaultFolder(newFolderName.trim());
+        setNewFolderName('');
+        setIsCreatingFolder(false);
+        loadData();
+    }
   }
 
   const handleDragStart = (e: React.DragEvent, itemId: string) => {
@@ -109,7 +112,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
           </div>
           <div className="pt-2 border-t border-gray-200 dark:border-white/5 flex items-center justify-between text-xs text-gray-500">
               <span>{new Date(item.createdAt).toLocaleDateString()}</span>
-              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="flex items-center gap-1 opacity-100 transition-opacity">
                   <button 
                       onClick={() => handleTogglePin(item.id, item.isPinned)}
                       className={`p-1.5 rounded-lg transition-colors ${item.isPinned ? 'text-amber-400 bg-amber-400/10' : 'hover:bg-gray-200 dark:hover:bg-white/10 text-gray-400'}`}
@@ -165,7 +168,11 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
             <h2 className="font-bold text-lg text-slate-800 dark:text-white flex items-center gap-2">
               <span>📂</span> Vault
             </h2>
-            <button onClick={handleCreateFolder} className="p-1 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md transition-colors" title="New Folder">
+            <button 
+                onClick={() => setIsCreatingFolder(true)} 
+                className="p-1 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md transition-colors" 
+                title="New Folder"
+            >
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5 text-gray-500">
                   <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
                 </svg>
@@ -173,6 +180,26 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
           </div>
           
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {isCreatingFolder && (
+                <div className="mb-2 px-3 animate-fade-in-up">
+                    <input
+                        autoFocus
+                        type="text"
+                        placeholder="Folder Name"
+                        className="w-full bg-white dark:bg-slate-800 border border-indigo-400 rounded-lg px-2 py-1.5 text-sm outline-none dark:text-white"
+                        value={newFolderName}
+                        onChange={(e) => setNewFolderName(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleCreateFolder();
+                            if (e.key === 'Escape') setIsCreatingFolder(false);
+                        }}
+                        onBlur={() => {
+                            if (!newFolderName.trim()) setIsCreatingFolder(false);
+                        }}
+                    />
+                </div>
+            )}
+
             <button 
               onClick={() => setSelectedFolderId(null)}
               onDragOver={handleDragOver}
