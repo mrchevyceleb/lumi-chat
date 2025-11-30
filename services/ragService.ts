@@ -3,14 +3,27 @@ import { supabase } from './supabaseClient';
 
 export const ragService = {
   // Step A: Fetch RAG context from Supabase Edge Function
-  async getRagContext(userMessage: string): Promise<string> {
+  // Now accepts conversation context to improve relevance filtering
+  async getRagContext(
+    userMessage: string, 
+    conversationId?: string,
+    conversationSummary?: string
+  ): Promise<string> {
     try {
       // Don't fetch if message is empty
       if (!userMessage || !userMessage.trim()) return "";
 
+      // Build the query with conversation context for better relevance
+      const queryWithContext = conversationSummary 
+        ? `[Current conversation topic: ${conversationSummary}] ${userMessage}`
+        : userMessage;
+
       // Use invoke() as recommended by Supabase to handle CORS and Auth automatically
       const { data, error } = await supabase.functions.invoke('get-rag-context', {
-        body: { user_message: userMessage }
+        body: { 
+          user_message: queryWithContext,
+          conversation_id: conversationId // Can be used server-side to boost same-conversation results
+        }
       });
 
       if (error) {

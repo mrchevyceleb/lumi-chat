@@ -504,10 +504,26 @@ const App: React.FC = () => {
 
     // --- RAG & Title Generation (Background) ---
 
-    // 1. Fetch RAG Context (Non-blocking UI, but blocks model request)
+    // 1. Fetch RAG Context with conversation awareness
+    // Build a brief summary of current conversation topic from recent messages
     let ragContext = "";
     if (text.trim()) {
-       ragContext = await ragService.getRagContext(text);
+       const updatedChat = updatedChats.find(c => c.id === chatId);
+       let conversationSummary = "";
+       
+       // Extract topic context from recent messages (last 3 exchanges max)
+       if (updatedChat && updatedChat.messages.length > 0) {
+         const recentMessages = updatedChat.messages.slice(-6); // Last 3 exchanges
+         const topics = recentMessages
+           .filter(m => m.role === 'user')
+           .map(m => m.content.slice(0, 100))
+           .join('; ');
+         if (topics) {
+           conversationSummary = topics.slice(0, 300); // Cap at 300 chars
+         }
+       }
+       
+       ragContext = await ragService.getRagContext(text, chatId!, conversationSummary);
     }
 
     // 2. Title Gen

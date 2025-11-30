@@ -91,13 +91,18 @@ serve(async (req) => {
     // Add user text with optional RAG context
     let finalContent = lastMessage.content;
     if (ragContext) {
-      finalContent = `You are a helpful assistant. Use the context below if it is relevant.
-If it is not helpful, ignore it.
+      finalContent = `IMPORTANT CONTEXT PRIORITY RULES:
+1. ALWAYS prioritize the current conversation history above. The user is continuing an existing discussion.
+2. Only use the SUPPLEMENTARY MEMORY below if it is DIRECTLY and CLEARLY relevant to both:
+   - The current conversation topic/theme
+   - The user's specific request
+3. If the supplementary memory is about a DIFFERENT topic than the current conversation, IGNORE IT COMPLETELY.
+4. When in doubt, rely on the conversation history, not the supplementary memory.
 
-CONTEXT:
+SUPPLEMENTARY MEMORY (use ONLY if directly relevant to current conversation):
 ${ragContext}
 
-USER MESSAGE:
+USER'S CURRENT MESSAGE:
 ${lastMessage.content}`;
     }
     parts.push({ text: finalContent });
