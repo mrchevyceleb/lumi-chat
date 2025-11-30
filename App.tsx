@@ -429,7 +429,8 @@ const App: React.FC = () => {
     const initialText = text.trim() || files[0]?.name || "New Chat";
 
     if (!chatId) {
-      const title = `${usedPersona.name} - ${initialText.slice(0, 40)}`;
+      // Use a neutral, persona-agnostic placeholder title until the AI title is generated
+      const title = initialText.slice(0, 60);
       const newChat: ChatSession = {
         id: uuidv4(),
         title: title,
@@ -526,12 +527,12 @@ const App: React.FC = () => {
        ragContext = await ragService.getRagContext(text, chatId!, conversationSummary);
     }
 
-    // 2. Title Gen
+    // 2. Title Gen - use AI-only title (no persona prefix)
     if (shouldGenerateTitle && initialText.length > 0) {
       generateChatTitle(initialText).then(async (aiTitle) => {
            if (!aiTitle) return;
            const cleanTitle = aiTitle.replace(/^"|"$/g, '');
-           const finalTitle = `${usedPersona.name} - ${cleanTitle}`;
+           const finalTitle = cleanTitle;
            setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: finalTitle } : c));
            await dbService.updateChat(chatId!, { title: finalTitle });
       });
