@@ -36,6 +36,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showPersonaMenu, setShowPersonaMenu] = useState(false);
+  const [showMobileOptions, setShowMobileOptions] = useState(false); // NEW: Mobile Options State
   
   // Snippet Modal State
   const [showSnippetModal, setShowSnippetModal] = useState(false);
@@ -46,6 +47,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const recognitionRef = useRef<any>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const personaMenuRef = useRef<HTMLDivElement>(null);
+  const mobileOptionsRef = useRef<HTMLDivElement>(null); // NEW: Ref for mobile menu
 
   // --- Close menus on click outside
   useEffect(() => {
@@ -55,6 +57,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }
       if (personaMenuRef.current && !personaMenuRef.current.contains(event.target as Node)) {
         setShowPersonaMenu(false);
+      }
+      if (mobileOptionsRef.current && !mobileOptionsRef.current.contains(event.target as Node)) {
+        setShowMobileOptions(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -269,7 +274,83 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   </div>
                 )}
 
-                <div className="flex items-end gap-1 md:gap-2 p-1.5 md:p-2">
+                <div className="flex items-end gap-1 md:gap-2 p-1.5 md:p-2 relative">
+                   {/* Mobile Options Toggle */}
+                   <div className="relative md:hidden" ref={mobileOptionsRef}>
+                      <button
+                        onClick={() => setShowMobileOptions(!showMobileOptions)}
+                        className={`p-2 text-gray-400 hover:text-indigo-500 transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 ${showMobileOptions ? 'bg-indigo-50 text-indigo-500 dark:bg-slate-700' : ''}`}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 0 1 0 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.212 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281Z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                        </svg>
+                      </button>
+
+                      {/* Mobile Menu Popup */}
+                      {showMobileOptions && (
+                        <div className="absolute bottom-full left-0 mb-2 w-64 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-600 overflow-hidden animate-fade-in-up z-50 p-3 space-y-3">
+                           
+                           {/* 1. Model Selection */}
+                           <div>
+                             <div className="text-xs font-bold text-gray-400 uppercase mb-1">Model</div>
+                             <div className="space-y-1">
+                               {AVAILABLE_MODELS.map(model => (
+                                 <button
+                                   key={model.id}
+                                   onClick={() => { setSelectedModel(model.id); setShowMobileOptions(false); }}
+                                   className={`w-full text-left px-2 py-1.5 rounded-lg text-xs transition-colors flex items-center justify-between ${selectedModel === model.id ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
+                                 >
+                                   <span>{model.name}</span>
+                                   {selectedModel === model.id && <span>✓</span>}
+                                 </button>
+                               ))}
+                             </div>
+                           </div>
+
+                           {/* 2. Response Length */}
+                           <div>
+                             <div className="text-xs font-bold text-gray-400 uppercase mb-1">Length</div>
+                             <div className="flex bg-gray-100 dark:bg-slate-700 rounded-lg p-1">
+                               <button 
+                                 onClick={() => setResponseLength('concise')}
+                                 className={`flex-1 py-1.5 text-xs rounded-md font-medium transition-all ${responseLength === 'concise' ? 'bg-white dark:bg-slate-600 shadow text-indigo-600 dark:text-indigo-300' : 'text-gray-500 dark:text-gray-400'}`}
+                               >
+                                 Brief
+                               </button>
+                               <button 
+                                 onClick={() => setResponseLength('detailed')}
+                                 className={`flex-1 py-1.5 text-xs rounded-md font-medium transition-all ${responseLength === 'detailed' ? 'bg-white dark:bg-slate-600 shadow text-indigo-600 dark:text-indigo-300' : 'text-gray-500 dark:text-gray-400'}`}
+                               >
+                                 Detailed
+                               </button>
+                             </div>
+                           </div>
+
+                           {/* 3. Extra Tools */}
+                           <div>
+                             <div className="text-xs font-bold text-gray-400 uppercase mb-1">Tools</div>
+                             <div className="flex flex-col gap-1">
+                               <button 
+                                 onClick={() => { setUseSearch(!useSearch); setShowMobileOptions(false); }}
+                                 className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${useSearch ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
+                               >
+                                 <span className="text-lg">🌍</span>
+                                 <span>Google Search {useSearch ? '(On)' : '(Off)'}</span>
+                               </button>
+                               <button 
+                                 onClick={() => { setShowSnippetModal(true); setShowMobileOptions(false); }}
+                                 className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
+                               >
+                                 <span className="text-lg">💻</span>
+                                 <span>Add Code Snippet</span>
+                               </button>
+                             </div>
+                           </div>
+                        </div>
+                      )}
+                   </div>
+
                    {/* Attachment Button - Always visible */}
                    <button 
                      onClick={() => fileInputRef.current?.click()}

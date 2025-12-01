@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { VaultFolder, VaultItem } from '../types';
 import { dbService } from '../services/dbService';
+import { SnippetEditorModal } from './SnippetEditorModal';
 
 interface VaultModalProps {
   isOpen: boolean;
@@ -15,8 +16,9 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
-
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [editingSnippet, setEditingSnippet] = useState<VaultItem | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -68,7 +70,29 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
   }
 
   const handleDragStart = (e: React.DragEvent, itemId: string) => {
+      setIsDragging(true);
       e.dataTransfer.setData("vaultItemId", itemId);
+  };
+
+  const handleDragEnd = () => {
+      // Use setTimeout to allow click event to be cancelled if it was a drag
+      setTimeout(() => setIsDragging(false), 100);
+  };
+
+  const handleSnippetClick = (e: React.MouseEvent, item: VaultItem) => {
+      // Don't open modal if clicking on action buttons
+      if ((e.target as HTMLElement).closest('button')) {
+          return;
+      }
+      // Don't open modal if we just dragged
+      if (isDragging) {
+          return;
+      }
+      setEditingSnippet(item);
+  };
+
+  const handleSnippetUpdate = (updatedSnippet: VaultItem) => {
+      setItems(items.map(i => i.id === updatedSnippet.id ? updatedSnippet : i));
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -103,7 +127,10 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
           key={item.id} 
           draggable
           onDragStart={(e) => handleDragStart(e, item.id)}
-          className="group bg-gray-50 dark:bg-[#1e293b] border border-gray-200 dark:border-white/5 rounded-xl p-4 hover:shadow-lg hover:border-indigo-500/30 transition-all flex flex-col h-48 cursor-move relative"
+          onDragEnd={handleDragEnd}
+          onClick={(e) => handleSnippetClick(e, item)}
+          className="group bg-gray-50 dark:bg-[#1e293b] border border-gray-200 dark:border-white/5 rounded-xl p-4 hover:shadow-lg hover:border-indigo-500/30 transition-all flex flex-col h-48 cursor-pointer relative"
+          title="Click to view/edit snippet"
       >
           <div className="flex-1 overflow-y-auto custom-scrollbar mb-2 pr-2">
               <p className="text-slate-700 dark:text-slate-300 whitespace-pre-wrap text-sm leading-relaxed font-mono">
@@ -112,9 +139,12 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
           </div>
           <div className="pt-2 border-t border-gray-200 dark:border-white/5 flex items-center justify-between text-xs text-gray-500">
               <span>{new Date(item.createdAt).toLocaleDateString()}</span>
-              <div className="flex items-center gap-1 opacity-100 transition-opacity">
+              <div className="flex items-center gap-1 opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                   <button 
-                      onClick={() => handleTogglePin(item.id, item.isPinned)}
+                      onClick={(e) => {
+                          e.stopPropagation();
+                          handleTogglePin(item.id, item.isPinned);
+                      }}
                       className={`p-1.5 rounded-lg transition-colors ${item.isPinned ? 'text-amber-400 bg-amber-400/10' : 'hover:bg-gray-200 dark:hover:bg-white/10 text-gray-400'}`}
                       title={item.isPinned ? "Unpin" : "Pin"}
                   >
@@ -123,7 +153,10 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
                       </svg>
                   </button>
                   <button 
-                      onClick={() => handleCopyItem(item.content)}
+                      onClick={(e) => {
+                          e.stopPropagation();
+                          handleCopyItem(item.content);
+                      }}
                       className="p-1.5 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 rounded-lg transition-colors"
                       title="Copy to clipboard"
                   >
@@ -133,7 +166,10 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
                       </svg>
                   </button>
                   <button 
-                      onClick={() => handleDeleteItem(item.id)}
+                      onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteItem(item.id);
+                      }}
                       className="p-1.5 hover:bg-red-100 dark:hover:bg-red-500/20 text-red-500 rounded-lg transition-colors"
                       title="Delete"
                   >
@@ -287,6 +323,14 @@ export const VaultModal: React.FC<VaultModalProps> = ({ isOpen, onClose }) => {
           </div>
         </div>
       </div>
+
+      {/* Snippet Editor Modal */}
+      <SnippetEditorModal
+        isOpen={editingSnippet !== null}
+        snippet={editingSnippet}
+        onClose={() => setEditingSnippet(null)}
+        onUpdate={handleSnippetUpdate}
+      />
     </div>
   );
 };

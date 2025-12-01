@@ -382,6 +382,19 @@ export const dbService = {
     if (error) logError("Move vault item error", error);
   },
 
+  async updateVaultItem(itemId: string, updates: { content?: string; sourceContext?: string }): Promise<void> {
+    const updateData: any = {};
+    if (updates.content !== undefined) updateData.content = updates.content;
+    if (updates.sourceContext !== undefined) updateData.source_context = updates.sourceContext;
+    
+    const { error } = await supabase
+      .from('vault_items')
+      .update(updateData)
+      .eq('id', itemId);
+    
+    if (error) logError("Update vault item error", error);
+  },
+
   async deleteVaultItem(itemId: string): Promise<void> {
     const { error } = await supabase.from('vault_items').delete().eq('id', itemId);
     if (error) logError("Delete vault item error", error);

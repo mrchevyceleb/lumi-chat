@@ -15,6 +15,7 @@ import { AuthOverlay } from './components/AuthOverlay';
 import { SettingsModal } from './components/SettingsModal';
 import { VaultCapture } from './components/VaultCapture';
 import { VaultModal } from './components/VaultModal';
+import { ContextMenu } from './components/ContextMenu';
 
 // Mock data initialization
 const INITIAL_PERSONAS = [DEFAULT_PERSONA, CODING_PERSONA];
@@ -46,6 +47,12 @@ const App: React.FC = () => {
   });
 
   const [openTabs, setOpenTabs] = useState<string[]>([]); // New: Track open tabs
+  const [tabContextMenu, setTabContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    chatId: string;
+  } | null>(null);
 
   // Default sidebar closed on mobile for cleaner UX
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
@@ -308,10 +315,12 @@ const App: React.FC = () => {
   // --- Actions ---
 
   const createNewChat = async (personaOverride?: Persona, folderId?: string) => {
-    let personaToUse = currentPersona;
+    let personaToUse = DEFAULT_PERSONA;
     if (personaOverride) {
       personaToUse = personaOverride;
       setCurrentPersona(personaOverride);
+    } else {
+      setCurrentPersona(DEFAULT_PERSONA);
     }
     const newChat: ChatSession = {
       id: uuidv4(),
@@ -324,7 +333,7 @@ const App: React.FC = () => {
     };
     setChats([newChat, ...chats]);
     setActiveChatId(newChat.id);
-    if (window.innerWidth < 768) setIsSidebarOpen(false);
+    setIsSidebarOpen(false); // Close sidebar when creating new chat
     await dbService.createChat(newChat);
   };
 
@@ -340,6 +349,46 @@ const App: React.FC = () => {
 
   const handleTabClick = (chatId: string) => {
     setActiveChatId(chatId);
+  };
+
+  const handleTabContextMenu = (e: React.MouseEvent, chatId: string) => {
+    e.preventDefault();
+    setTabContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      chatId
+    });
+  };
+
+  const handleCloseOthers = () => {
+    if (!tabContextMenu) return;
+    const { chatId } = tabContextMenu;
+    setOpenTabs([chatId]);
+    if (activeChatId !== chatId) setActiveChatId(chatId);
+    setTabContextMenu(null);
+  };
+
+  const handleCloseToRight = () => {
+    if (!tabContextMenu) return;
+    const { chatId } = tabContextMenu;
+    const index = openTabs.indexOf(chatId);
+    if (index === -1) return;
+    
+    const newTabs = openTabs.slice(0, index + 1);
+    setOpenTabs(newTabs);
+    
+    // If active chat was closed (meaning it was to the right), switch to the current tab
+    if (activeChatId && !newTabs.includes(activeChatId)) {
+      setActiveChatId(chatId);
+    }
+    setTabContextMenu(null);
+  };
+
+  const handleCloseAll = () => {
+    setOpenTabs([]);
+    setActiveChatId(null);
+    setTabContextMenu(null);
   };
 
   const handleStopGeneration = () => {
@@ -385,6 +434,7 @@ const App: React.FC = () => {
        setChats(currentChatList);
        setActiveChatId(chatId);
        isNewChat = true;
+       setIsSidebarOpen(false); // Close sidebar when starting new chat via live transcript
        await dbService.createChat(newChat);
     }
 
@@ -443,6 +493,7 @@ const App: React.FC = () => {
       currentChatList = [newChat, ...chats];
       setActiveChatId(chatId);
       isNewChat = true;
+      setIsSidebarOpen(false); // Close sidebar when starting new chat
       dbService.createChat(newChat); 
     }
 
@@ -874,7 +925,12 @@ const App: React.FC = () => {
                if (!chat) return null;
                const isActive = activeChatId === tabId;
                return (
-                 <div key={tabId} onClick={() => handleTabClick(tabId)} className={`group relative flex items-center justify-between gap-2 px-3 h-8 min-w-[120px] max-w-[200px] rounded-t-lg cursor-pointer select-none transition-all duration-200 border-t-2 ${isActive ? 'bg-white dark:bg-[#1e293b]/60 text-indigo-600 dark:text-indigo-300 border-indigo-500 shadow-sm z-10 backdrop-blur-sm' : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-white/40 dark:hover:bg-white/5 border-transparent hover:text-gray-700 dark:hover:text-gray-200'}`}>
+                 <div 
+                   key={tabId} 
+                   onClick={() => handleTabClick(tabId)} 
+                   onContextMenu={(e) => handleTabContextMenu(e, tabId)}
+                   className={`group relative flex items-center justify-between gap-2 px-3 h-8 min-w-[120px] max-w-[200px] rounded-t-lg cursor-pointer select-none transition-all duration-200 border-t-2 ${isActive ? 'bg-white dark:bg-[#1e293b]/60 text-indigo-600 dark:text-indigo-300 border-indigo-500 shadow-sm z-10 backdrop-blur-sm' : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-white/40 dark:hover:bg-white/5 border-transparent hover:text-gray-700 dark:hover:text-gray-200'}`}
+                 >
                    <span className="text-xs font-medium truncate flex-1">{chat.title}</span>
                    <button onClick={(e) => handleCloseTab(e, tabId)} className={`p-0.5 rounded-md opacity-0 group-hover:opacity-100 hover:bg-gray-200 dark:hover:bg-white/10 transition-all ${isActive ? 'opacity-100' : ''}`}>
                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3 h-3"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
@@ -884,6 +940,20 @@ const App: React.FC = () => {
                );
              })}
           </div>
+        )}
+
+        {tabContextMenu && (
+          <ContextMenu
+            x={tabContextMenu.x}
+            y={tabContextMenu.y}
+            onClose={() => setTabContextMenu(null)}
+            items={[
+              { label: 'Close', onClick: () => handleCloseTab({ stopPropagation: () => {} } as any, tabContextMenu.chatId) },
+              { label: 'Close Others', onClick: handleCloseOthers },
+              { label: 'Close to the Right', onClick: handleCloseToRight },
+              { label: 'Close All', onClick: handleCloseAll, danger: true }
+            ]}
+          />
         )}
 
         {/* Chat Area */}
