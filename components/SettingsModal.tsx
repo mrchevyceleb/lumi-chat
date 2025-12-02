@@ -2,7 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import { UsageStats } from '../services/dbService';
-import { AVAILABLE_MODELS } from '../types';
+import { AVAILABLE_MODELS, ModelId } from '../types';
 import { previewVoice } from '../services/geminiService';
 import { AudioUtils } from '../services/audioUtils';
 
@@ -17,6 +17,8 @@ interface SettingsModalProps {
   setVoiceName: (name: string) => void;
   usageStats?: UsageStats;
   onUpdateApiKey?: () => void;
+  defaultModel: ModelId;
+  setDefaultModel: (modelId: ModelId) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ 
@@ -29,7 +31,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   voiceName,
   setVoiceName,
   usageStats = { inputTokens: 0, outputTokens: 0, modelBreakdown: {} },
-  onUpdateApiKey
+  onUpdateApiKey,
+  defaultModel,
+  setDefaultModel
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'dashboard'>('general');
   const [playingVoice, setPlayingVoice] = useState<string | null>(null);
@@ -204,6 +208,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   >
                     <div className={`w-4 h-4 bg-white rounded-full shadow-sm transform transition-transform duration-200 ${darkMode ? 'translate-x-6' : 'translate-x-0'}`} />
                   </button>
+                </div>
+
+                {/* Default Model Settings */}
+                <div>
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Default Model</h3>
+                  <select
+                    value={defaultModel}
+                    onChange={(e) => setDefaultModel(e.target.value as ModelId)}
+                    className="w-full px-3 py-2 bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-xl text-sm text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  >
+                    {AVAILABLE_MODELS.map(model => (
+                      <option key={model.id} value={model.id}>
+                        {model.name} - {model.description}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Voice Settings */}

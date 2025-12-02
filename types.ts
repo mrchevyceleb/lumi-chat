@@ -79,7 +79,7 @@ export const CODING_PERSONA: Persona = {
   color: 'bg-blue-500'
 };
 
-export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-flash-lite-latest' | 'gpt-5.1' | 'gpt-5-mini' | 'gpt-5-nano';
+export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-flash-lite-latest' | 'gpt-5.1' | 'gpt-5-mini' | 'gpt-5-nano' | 'o1' | 'o1-mini';
 
 export interface ModelConfig {
   id: ModelId;
@@ -131,5 +131,19 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     description: 'Ultra-fast, most affordable.', 
     costInput: 0.05, 
     costOutput: 0.40 
+  },
+  { 
+    id: 'o1', 
+    name: 'ChatGPT o1', 
+    description: 'Deep research & reasoning.', 
+    costInput: 15.00, 
+    costOutput: 60.00 
+  },
+  { 
+    id: 'o1-mini', 
+    name: 'ChatGPT o1-mini', 
+    description: 'Compact deep research model.', 
+    costInput: 3.00, 
+    costOutput: 12.00 
   }
 ];

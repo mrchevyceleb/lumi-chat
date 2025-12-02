@@ -6,7 +6,7 @@ import { Sidebar } from './components/Sidebar';
 import { MessageBubble } from './components/MessageBubble';
 import { ChatInput } from './components/ChatInput'; // New Import
 import { streamChatResponse, generateChatTitle, InvalidApiKeyError } from './services/geminiService';
-import { ChatSession, Folder, Message, Persona, DEFAULT_PERSONA, CODING_PERSONA, ModelId } from './types';
+import { ChatSession, Folder, Message, Persona, DEFAULT_PERSONA, CODING_PERSONA, ModelId, AVAILABLE_MODELS } from './types';
 import { LiveSessionOverlay } from './components/LiveSessionOverlay';
 import { supabase } from './services/supabaseClient';
 import { dbService, UsageStats } from './services/dbService';
@@ -71,6 +71,12 @@ const App: React.FC = () => {
     return localStorage.getItem('lumi_voice_name') || 'Kore';
   });
 
+  // Default Model State (Settings)
+  const [defaultModel, setDefaultModel] = useState<ModelId>(() => {
+    const saved = localStorage.getItem('lumi_default_model');
+    return (saved && AVAILABLE_MODELS.some(m => m.id === saved)) ? saved as ModelId : AVAILABLE_MODELS[0].id;
+  });
+
   // Token Usage State
   const [usageStats, setUsageStats] = useState<UsageStats>({ 
     inputTokens: 0, 
@@ -81,6 +87,10 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('lumi_voice_name', voiceName);
   }, [voiceName]);
+
+  useEffect(() => {
+    localStorage.setItem('lumi_default_model', defaultModel);
+  }, [defaultModel]);
 
   // Persist Active Chat ID
   useEffect(() => {
@@ -952,6 +962,8 @@ const App: React.FC = () => {
         voiceName={voiceName}
         setVoiceName={setVoiceName}
         usageStats={usageStats}
+        defaultModel={defaultModel}
+        setDefaultModel={setDefaultModel}
       />
 
       <VaultModal 
@@ -1081,6 +1093,7 @@ const App: React.FC = () => {
           onCreatePersona={startCreatingPersona}
           onEditPersona={startEditingPersona}
           onDeletePersona={handleDeletePersona}
+          defaultModel={defaultModel}
         />
 
       </div>

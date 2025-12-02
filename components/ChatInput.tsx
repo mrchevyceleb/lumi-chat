@@ -13,6 +13,7 @@ interface ChatInputProps {
   onCreatePersona: () => void;
   onEditPersona: (persona: Persona) => void;
   onDeletePersona: (personaId: string) => void;
+  defaultModel: ModelId;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({ 
@@ -24,15 +25,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onPersonaChange,
   onCreatePersona,
   onEditPersona,
-  onDeletePersona
+  onDeletePersona,
+  defaultModel
 }) => {
   const [input, setInput] = useState('');
   const [attachedFiles, setAttachedFiles] = useState<{name: string, data: string, mimeType: string, isTextContext?: boolean}[]>([]);
   const [useSearch, setUseSearch] = useState(false);
   const [responseLength, setResponseLength] = useState<'concise' | 'detailed'>('detailed');
   const [isListening, setIsListening] = useState(false);
-  // Default to the first available model to ensure validity
-  const [selectedModel, setSelectedModel] = useState<ModelId>(AVAILABLE_MODELS[0].id);
+  // Default to the defaultModel prop or first available model
+  const [selectedModel, setSelectedModel] = useState<ModelId>(defaultModel || AVAILABLE_MODELS[0].id);
   
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showPersonaMenu, setShowPersonaMenu] = useState(false);
@@ -48,6 +50,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const personaMenuRef = useRef<HTMLDivElement>(null);
   const mobileOptionsRef = useRef<HTMLDivElement>(null); // NEW: Ref for mobile menu
+
+  // Sync selected model with default model from settings when it changes
+  useEffect(() => {
+    if (defaultModel && AVAILABLE_MODELS.some(m => m.id === defaultModel)) {
+      setSelectedModel(defaultModel);
+    }
+  }, [defaultModel]);
 
   // --- Close menus on click outside
   useEffect(() => {
