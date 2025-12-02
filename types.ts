@@ -79,7 +79,7 @@ export const CODING_PERSONA: Persona = {
   color: 'bg-blue-500'
 };
 
-export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-flash-lite-latest';
+export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-flash-lite-latest' | 'gpt-5.1' | 'gpt-5-mini' | 'gpt-5-nano';
 
 export interface ModelConfig {
   id: ModelId;
@@ -110,5 +110,26 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     description: 'High intelligence & reasoning.', 
     costInput: 2.50, 
     costOutput: 10.00 
+  },
+  { 
+    id: 'gpt-5.1', 
+    name: 'GPT-5.1', 
+    description: 'Flagship model for coding & reasoning.', 
+    costInput: 1.25, 
+    costOutput: 10.00 
+  },
+  { 
+    id: 'gpt-5-mini', 
+    name: 'GPT-5 Mini', 
+    description: 'Fast & cost-effective.', 
+    costInput: 0.25, 
+    costOutput: 2.00 
+  },
+  { 
+    id: 'gpt-5-nano', 
+    name: 'GPT-5 Nano', 
+    description: 'Ultra-fast, most affordable.', 
+    costInput: 0.05, 
+    costOutput: 0.40 
   }
 ];
