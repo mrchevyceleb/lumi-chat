@@ -18,7 +18,10 @@ interface SetupMessage {
     };
     systemInstruction?: {
         parts: { text: string }[];
-    }
+    };
+    // Enable transcription of audio
+    inputAudioTranscription?: Record<string, unknown>;
+    outputAudioTranscription?: Record<string, unknown>;
   }
 }
 
@@ -38,7 +41,8 @@ interface ServerMessage {
                 inlineData?: {
                     mimeType: string;
                     data: string;
-                }
+                };
+                text?: string; // Text transcription from model
             }[];
         };
         turnComplete?: boolean;
@@ -46,7 +50,8 @@ interface ServerMessage {
     };
     toolCall?: any; // Ignored for now
     // Live API v1alpha/beta variations:
-    inputAudioTranscription?: { text: string }; // Might be inside serverContent or separate depending on version
+    inputAudioTranscription?: { text: string }; // User's spoken input transcription
+    outputAudioTranscription?: { text: string }; // Model's output transcription (alternative location)
 }
 
 interface TranscriptEntry {
@@ -148,19 +153,24 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
   }, [isOpen, status]);
 
   const cleanup = () => {
-    // Send any remaining buffered transcripts before cleanup
-    const remainingTranscripts: TranscriptEntry[] = [];
-    if (inputTranscriptBuffer.current.trim()) {
-      remainingTranscripts.push({ text: inputTranscriptBuffer.current.trim(), role: 'user' });
-    }
-    if (outputTranscriptBuffer.current.trim()) {
-      remainingTranscripts.push({ text: outputTranscriptBuffer.current.trim(), role: 'model' });
-    }
+    // Only send transcripts if we had an active session
+    const hadActiveSession = currentSessionIdRef.current !== "";
     
-    // Combine all transcripts and send them when call ends
-    const allTranscripts = [...allTranscriptsRef.current, ...remainingTranscripts];
-    if (allTranscripts.length > 0 && onCallEndRef.current) {
-      onCallEndRef.current(allTranscripts);
+    if (hadActiveSession) {
+      // Send any remaining buffered transcripts before cleanup
+      const remainingTranscripts: TranscriptEntry[] = [];
+      if (inputTranscriptBuffer.current.trim()) {
+        remainingTranscripts.push({ text: inputTranscriptBuffer.current.trim(), role: 'user' });
+      }
+      if (outputTranscriptBuffer.current.trim()) {
+        remainingTranscripts.push({ text: outputTranscriptBuffer.current.trim(), role: 'model' });
+      }
+      
+      // Combine all transcripts and send them when call ends
+      const allTranscripts = [...allTranscriptsRef.current, ...remainingTranscripts];
+      if (allTranscripts.length > 0 && onCallEndRef.current) {
+        onCallEndRef.current(allTranscripts);
+      }
     }
     
     // Clear transcripts for next session
@@ -251,7 +261,7 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
         if (currentSessionIdRef.current !== sessionId) return;
         if (mountedRef.current) setStatus('connected');
 
-        // Send Setup Message
+        // Send Setup Message with transcription enabled
         const setupMsg: SetupMessage = {
             setup: {
                 model: "models/gemini-2.0-flash-exp",
@@ -267,7 +277,10 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
                 },
                 systemInstruction: {
                     parts: [{ text: `You are acting as the persona: ${persona.name}. ${persona.systemInstruction}. Keep your responses relatively concise and conversational as this is a voice chat.` }]
-                }
+                },
+                // Enable transcription for both input (user) and output (model) audio
+                inputAudioTranscription: {},
+                outputAudioTranscription: {}
             }
         };
         ws.send(JSON.stringify(setupMsg));
@@ -342,24 +355,39 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
                 audioSourcesRef.current.add(source);
             }
             
-            // --- Transcription Handling ---
-            // Extract transcripts from various possible message formats
-            // User input transcription
-            if (message.inputAudioTranscription?.text) {
-                inputTranscriptBuffer.current += message.inputAudioTranscription.text + " ";
-            }
-            // Check for transcription in serverContent
-            if (message.serverContent?.modelTurn?.parts) {
-                for (const part of message.serverContent.modelTurn.parts) {
-                    if (part.text) {
-                        outputTranscriptBuffer.current += part.text + " ";
-                        setCurrentSubtitle(part.text);
+            // --- Transcription Handling (wrapped in try-catch to not break audio) ---
+            try {
+                // Log raw message for debugging (remove in production)
+                console.log("[Live] Message received:", JSON.stringify(message).slice(0, 500));
+                
+                // User input transcription (from Gemini Live API)
+                if (message.inputAudioTranscription?.text) {
+                    console.log("[Live] Input transcription:", message.inputAudioTranscription.text);
+                    inputTranscriptBuffer.current += message.inputAudioTranscription.text + " ";
+                }
+                // Model output transcription
+                if ((message as any).outputAudioTranscription?.text) {
+                    console.log("[Live] Output transcription:", (message as any).outputAudioTranscription.text);
+                    outputTranscriptBuffer.current += (message as any).outputAudioTranscription.text + " ";
+                }
+                // Check for text in serverContent.modelTurn.parts (alternative format)
+                const parts = message.serverContent?.modelTurn?.parts;
+                if (parts && Array.isArray(parts)) {
+                    for (const part of parts) {
+                        if ((part as any).text) {
+                            console.log("[Live] Model text part:", (part as any).text);
+                            outputTranscriptBuffer.current += (part as any).text + " ";
+                            setCurrentSubtitle((part as any).text);
+                        }
                     }
                 }
-            }
-            // Check for separate transcription fields
-            if ((message as any).transcription?.text) {
-                inputTranscriptBuffer.current += (message as any).transcription.text + " ";
+                // Check for separate transcription fields
+                if ((message as any).transcription?.text) {
+                    console.log("[Live] Transcription field:", (message as any).transcription.text);
+                    inputTranscriptBuffer.current += (message as any).transcription.text + " ";
+                }
+            } catch (transcriptErr) {
+                console.warn("Transcription extraction error (non-fatal):", transcriptErr);
             }
             
             // Handle Turn Completion

@@ -17,6 +17,28 @@ function isOpenAIModel(modelId: string): boolean {
   return modelId?.startsWith("gpt-");
 }
 
+// Map frontend model IDs to actual API model names
+function mapModelId(modelId: string): string {
+  const modelMap: Record<string, string> = {
+    // Gemini models - map to actual Google API model names (use stable aliases)
+    "gemini-2.5-flash": "gemini-2.5-flash-preview-09-2025",
+    "gemini-3-pro-preview": "gemini-2.5-pro-preview-06-05",
+    "gemini-flash-lite-latest": "gemini-2.0-flash-lite",
+    // OpenAI models - map to actual OpenAI API model names  
+    "gpt-5.1": "gpt-4.1",
+    "gpt-5-mini": "gpt-4.1-mini",
+    "gpt-5-nano": "gpt-4.1-nano",
+  };
+  
+  const mapped = modelMap[modelId];
+  if (mapped) {
+    console.log(`Model mapping: ${modelId} -> ${mapped}`);
+    return mapped;
+  }
+  console.log(`Model not mapped, using as-is: ${modelId}`);
+  return modelId;
+}
+
 // Handle OpenAI streaming response
 async function handleOpenAI(
   messages: any[],
@@ -100,9 +122,12 @@ ${lastMessage.content}`;
     openaiMessages.push({ role: "user", content: contentParts });
   }
 
+  // Map the model ID to actual API model name
+  const actualModelId = mapModelId(modelId);
+
   // Build request body
   const requestBody: any = {
-    model: modelId,
+    model: actualModelId,
     input: openaiMessages,
     stream: true,
   };
@@ -237,9 +262,12 @@ async function handleGemini(
     parts: [{ text: msg.content }],
   }));
 
+  // Map the model ID to actual API model name
+  const actualModelId = mapModelId(modelId) || "gemini-2.0-flash";
+
   // Create model with config
   const model = genAI.getGenerativeModel({
-    model: modelId || "gemini-2.0-flash-exp",
+    model: actualModelId,
     systemInstruction: systemInstruction,
     tools: tools.length > 0 ? tools : undefined,
   });

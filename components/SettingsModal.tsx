@@ -1,8 +1,10 @@
 
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { UsageStats } from '../services/dbService';
 import { AVAILABLE_MODELS } from '../types';
+import { previewVoice } from '../services/geminiService';
+import { AudioUtils } from '../services/audioUtils';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -30,6 +32,73 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onUpdateApiKey
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'dashboard'>('general');
+  const [playingVoice, setPlayingVoice] = useState<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  // Cleanup audio when modal closes
+  React.useEffect(() => {
+    if (!isOpen) {
+      if (currentSourceRef.current) {
+        try { currentSourceRef.current.stop(); } catch (e) {}
+        currentSourceRef.current = null;
+        setPlayingVoice(null);
+      }
+    }
+  }, [isOpen]);
+
+  const handlePreview = async (name: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    // Stop current if playing
+    if (currentSourceRef.current) {
+      try {
+        currentSourceRef.current.stop();
+      } catch (e) {}
+      currentSourceRef.current = null;
+      setPlayingVoice(null);
+      
+      // If clicking the same voice, just stop (toggle behavior)
+      if (playingVoice === name) return;
+    }
+
+    try {
+      setPlayingVoice(name);
+      
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      const ctx = audioContextRef.current;
+      if (ctx.state === 'suspended') await ctx.resume();
+
+      const base64Audio = await previewVoice(name);
+      
+      if (!base64Audio) {
+          setPlayingVoice(null);
+          return;
+      }
+
+      const audioData = AudioUtils.decode(base64Audio);
+      const audioBuffer = await AudioUtils.decodeAudioData(audioData, ctx, 24000);
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+      
+      source.onended = () => {
+        setPlayingVoice(null);
+        currentSourceRef.current = null;
+      };
+      
+      currentSourceRef.current = source;
+      source.start();
+
+    } catch (err) {
+      console.error("Preview failed", err);
+      setPlayingVoice(null);
+      currentSourceRef.current = null;
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -141,29 +210,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div>
                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Live Voice</h3>
                    <div className="grid grid-cols-2 gap-2">
-                     {[
-                       { name: 'Kore', label: 'Kore (Female)', gender: 'Female' },
-                       { name: 'Aoede', label: 'Aoede (Female)', gender: 'Female' },
-                       { name: 'Puck', label: 'Puck (Male)', gender: 'Male' },
-                       { name: 'Fenrir', label: 'Fenrir (Male)', gender: 'Male' },
-                       { name: 'Charon', label: 'Charon (Male)', gender: 'Male' },
-                     ].map((v) => (
-                       <button
-                         key={v.name}
-                         onClick={() => setVoiceName(v.name)}
-                         className={`p-2 rounded-lg text-xs font-medium border transition-all text-left flex items-center justify-between
-                           ${voiceName === v.name 
-                             ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
-                             : 'bg-white dark:bg-slate-700 border-gray-200 dark:border-slate-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-600'
-                           }
-                         `}
-                       >
-                         <span>{v.name}</span>
-                         <span className={`text-[10px] opacity-70 ${voiceName === v.name ? 'text-indigo-100' : 'text-gray-400'}`}>
-                            {v.gender}
-                         </span>
-                       </button>
-                     ))}
+                  {[
+                    { name: 'Kore', label: 'Kore (Female)', gender: 'Female' },
+                    { name: 'Aoede', label: 'Aoede (Female)', gender: 'Female' },
+                    { name: 'Puck', label: 'Puck (Male)', gender: 'Male' },
+                    { name: 'Fenrir', label: 'Fenrir (Male)', gender: 'Male' },
+                    { name: 'Charon', label: 'Charon (Male)', gender: 'Male' },
+                  ].map((v) => (
+                    <button
+                      key={v.name}
+                      onClick={() => setVoiceName(v.name)}
+                      className={`p-2 rounded-lg text-xs font-medium border transition-all text-left flex items-center justify-between group
+                        ${voiceName === v.name 
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
+                          : 'bg-white dark:bg-slate-700 border-gray-200 dark:border-slate-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-600'
+                        }
+                      `}
+                    >
+                      <div className="flex flex-col">
+                        <span>{v.name}</span>
+                        <span className={`text-[10px] opacity-70 ${voiceName === v.name ? 'text-indigo-100' : 'text-gray-400'}`}>
+                           {v.gender}
+                        </span>
+                      </div>
+                      <div 
+                        onClick={(e) => handlePreview(v.name, e)}
+                        className={`p-1.5 rounded-full transition-colors ${
+                          playingVoice === v.name 
+                            ? 'bg-indigo-400 text-white animate-pulse' 
+                            : voiceName === v.name 
+                              ? 'hover:bg-indigo-500 text-indigo-100' 
+                              : 'hover:bg-gray-200 dark:hover:bg-slate-500 text-gray-400'
+                        }`}
+                        title="Preview Voice"
+                      >
+                        {playingVoice === v.name ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                            <path fillRule="evenodd" d="M4.5 7.5a3 3 0 013-3h9a3 3 0 013 3v9a3 3 0 01-3 3h-9a3 3 0 01-3-3v-9z" clipRule="evenodd" />
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                            <path fillRule="evenodd" d="M4.5 5.653c0-1.426 1.529-2.33 2.779-1.643l11.54 6.348c1.295.712 1.295 2.573 0 3.285L7.28 19.991c-1.25.687-2.779-.217-2.779-1.643V5.653z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </div>
+                    </button>
+                  ))}
                    </div>
                 </div>
               </div>

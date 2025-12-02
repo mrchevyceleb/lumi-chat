@@ -34,6 +34,27 @@ export const generateChatTitle = async (userMessage: string): Promise<string | n
   }
 };
 
+export const previewVoice = async (voiceName: string): Promise<string | null> => {
+  try {
+    const { data, error } = await supabase.functions.invoke('gemini-tts', {
+      body: { 
+        text: `Hello! I'm ${voiceName}. Nice to meet you.`,
+        voiceName 
+      }
+    });
+
+    if (error) {
+      console.error("Voice preview error:", error);
+      return null;
+    }
+
+    return data?.audioData || null; // Returns base64 string
+  } catch (e) {
+    console.error("Voice preview failed", e);
+    return null;
+  }
+};
+
 export const streamChatResponse = async (
   messages: Message[],
   persona: Persona,
