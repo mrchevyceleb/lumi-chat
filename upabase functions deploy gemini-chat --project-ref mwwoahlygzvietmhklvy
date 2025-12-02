@@ -1,0 +1,56 @@
+[1mdiff --git a/services/ragService.ts b/services/ragService.ts[m
+[1mindex ef4475f..2461e25 100644[m
+[1m--- a/services/ragService.ts[m
+[1m+++ b/services/ragService.ts[m
+[36m@@ -1,18 +1,50 @@[m
+ [m
+ import { supabase } from './supabaseClient';[m
+ [m
+[32m+[m[32m/**[m
+[32m+[m[32m * Checks if a message is likely a simple follow-up that doesn't need RAG.[m
+[32m+[m[32m * This saves API calls for conversational messages.[m
+[32m+[m[32m */[m
+[32m+[m[32mfunction isSimpleFollowUp(message: string, conversationLength: number): boolean {[m
+[32m+[m[32m  const trimmed = message.trim().toLowerCase();[m
+[32m+[m[41m  [m
+[32m+[m[32m  // Short messages in ongoing conversations are usually follow-ups[m
+[32m+[m[32m  if (conversationLength > 2 && trimmed.length < 30) {[m
+[32m+[m[32m    // Common follow-up patterns that don't need external memory[m
+[32m+[m[32m    const followUpPatterns = [[m
+[32m+[m[32m      /^(yes|no|yeah|yep|nope|ok|okay|sure|thanks|thank you|got it|i see|makes sense)/i,[m
+[32m+[m[32m      /^(what about|how about|and |but |so |also |can you|could you|please |tell me more)/i,[m
+[32m+[m[32m      /^(why|how|what|when|where|who)\??$/i, // Single-word questions[m
+[32m+[m[32m      /^(do it|go ahead|sounds good|perfect|great|nice|cool)/i,[m
+[32m+[m[32m    ];[m
+[32m+[m[41m    [m
+[32m+[m[32m    if (followUpPatterns.some(pattern => pattern.test(trimmed))) {[m
+[32m+[m[32m      console.log("🔵 RAG skipped: Simple follow-up detected");[m
+[32m+[m[32m      return true;[m
+[32m+[m[32m    }[m
+[32m+[m[32m  }[m
+[32m+[m[41m  [m
+[32m+[m[32m  return false;[m
+[32m+[m[32m}[m
+[32m+[m
+ export const ragService = {[m
+   // Step A: Fetch RAG context from Supabase Edge Function[m
+   // Now accepts conversation context to improve relevance filtering[m
+   async getRagContext([m
+     userMessage: string, [m
+     conversationId?: string,[m
+[31m-    conversationSummary?: string[m
+[32m+[m[32m    conversationSummary?: string,[m
+[32m+[m[32m    conversationLength: number = 0[m
+   ): Promise<string> {[m
+     try {[m
+       // Don't fetch if message is empty[m
+       if (!userMessage || !userMessage.trim()) return "";[m
+ [m
+[32m+[m[32m      // Skip RAG for simple follow-up messages to save API calls[m
+[32m+[m[32m      if (isSimpleFollowUp(userMessage, conversationLength)) {[m
+[32m+[m[32m        return "";[m
+[32m+[m[32m      }[m
+[32m+[m
+       // Build the query with conversation context for better relevance[m
+       const queryWithContext = conversationSummary [m
+         ? `[Current conversation topic: ${conversationSummary}] ${userMessage}`[m

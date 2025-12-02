@@ -20,14 +20,14 @@ function isOpenAIModel(modelId: string): boolean {
 // Map frontend model IDs to actual API model names
 function mapModelId(modelId: string): string {
   const modelMap: Record<string, string> = {
-    // Gemini models - map to actual Google API model names (use stable aliases)
-    "gemini-2.5-flash": "gemini-2.5-flash-preview-09-2025",
+    // Gemini models - map to actual Google API model names
+    "gemini-2.5-flash": "gemini-2.5-flash-preview-05-20",
     "gemini-3-pro-preview": "gemini-2.5-pro-preview-06-05",
     "gemini-flash-lite-latest": "gemini-2.0-flash-lite",
-    // OpenAI models - map to actual OpenAI API model names  
-    "gpt-5.1": "gpt-4.1",
-    "gpt-5-mini": "gpt-4.1-mini",
-    "gpt-5-nano": "gpt-4.1-nano",
+    // OpenAI GPT-5 models - use exact API names
+    "gpt-5.1": "gpt-5.1",
+    "gpt-5-mini": "gpt-5-mini",
+    "gpt-5-nano": "gpt-5-nano",
     // o1 models use exact strings
     "o1": "o1",
     "o1-mini": "o1-mini",
@@ -101,19 +101,17 @@ async function handleOpenAI(
   // Add user text with optional RAG context
   let finalContent = lastMessage.content;
   if (ragContext) {
-    finalContent = `IMPORTANT CONTEXT PRIORITY RULES:
-1. ALWAYS prioritize the current conversation history above. The user is continuing an existing discussion.
-2. Only use the SUPPLEMENTARY MEMORY below if it is DIRECTLY and CLEARLY relevant to both:
-   - The current conversation topic/theme
-   - The user's specific request
-3. If the supplementary memory is about a DIFFERENT topic than the current conversation, IGNORE IT COMPLETELY.
-4. When in doubt, rely on the conversation history, not the supplementary memory.
+    finalContent = `YOUR MEMORY OF THIS USER (from previous conversations):
+The following is retrieved context about this user from your long-term memory. This contains information they've shared with you before.
 
-SUPPLEMENTARY MEMORY (use ONLY if directly relevant to current conversation):
 ${ragContext}
 
-USER'S CURRENT MESSAGE:
-${lastMessage.content}`;
+---
+
+CURRENT REQUEST:
+${lastMessage.content}
+
+INSTRUCTIONS: Use the memory above to provide a personalized response. If the user references their "background", previous discussions, or asks you to "remember" something, the information is likely in the memory above.`;
   }
   contentParts.push({ type: "input_text", text: finalContent });
 
@@ -409,19 +407,17 @@ async function handleGemini(
   // Add user text with optional RAG context
   let finalContent = lastMessage.content;
   if (ragContext) {
-    finalContent = `IMPORTANT CONTEXT PRIORITY RULES:
-1. ALWAYS prioritize the current conversation history above. The user is continuing an existing discussion.
-2. Only use the SUPPLEMENTARY MEMORY below if it is DIRECTLY and CLEARLY relevant to both:
-   - The current conversation topic/theme
-   - The user's specific request
-3. If the supplementary memory is about a DIFFERENT topic than the current conversation, IGNORE IT COMPLETELY.
-4. When in doubt, rely on the conversation history, not the supplementary memory.
+    finalContent = `YOUR MEMORY OF THIS USER (from previous conversations):
+The following is retrieved context about this user from your long-term memory. This contains information they've shared with you before.
 
-SUPPLEMENTARY MEMORY (use ONLY if directly relevant to current conversation):
 ${ragContext}
 
-USER'S CURRENT MESSAGE:
-${lastMessage.content}`;
+---
+
+CURRENT REQUEST:
+${lastMessage.content}
+
+INSTRUCTIONS: Use the memory above to provide a personalized response. If the user references their "background", previous discussions, or asks you to "remember" something, the information is likely in the memory above.`;
   }
   parts.push({ text: finalContent });
 

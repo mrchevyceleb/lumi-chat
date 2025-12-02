@@ -95,8 +95,8 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     id: 'gpt-5-nano', 
     name: 'GPT-5 Nano', 
     description: 'Ultra-low cost, basic tasks.', 
-    costInput: 0.05, 
-    costOutput: 0.40 
+    costInput: 0.10, 
+    costOutput: 0.80 
   },
   {
     id: 'gemini-flash-lite-latest',
@@ -129,8 +129,8 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
   },
   { 
     id: 'gpt-5.1', 
-    name: 'GPT-5', 
-    description: 'General purpose flagship.', 
+    name: 'GPT-5.1', 
+    description: 'Flagship coding & reasoning.', 
     costInput: 1.25, 
     costOutput: 10.00 
   },

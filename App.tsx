@@ -996,21 +996,21 @@ const App: React.FC = () => {
 
       <div className="flex-1 flex flex-col z-10 h-full relative min-w-0">
         
-        {/* Top Bar - Compact on mobile */}
-        <div className="relative z-20 h-12 md:h-14 flex items-center justify-between px-3 md:px-6 bg-white/30 dark:bg-[#0f172a]/40 backdrop-blur-md flex-shrink-0 border-b border-white/40 dark:border-white/5">
+        {/* Top Bar - Touch-optimized for mobile */}
+        <div className="relative z-20 h-14 md:h-14 flex items-center justify-between px-2 md:px-6 bg-white/30 dark:bg-[#0f172a]/40 backdrop-blur-md flex-shrink-0 border-b border-white/40 dark:border-white/5 safe-area-top">
            <div className="flex items-center gap-2 md:gap-3 min-w-0">
-             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-500 hover:text-indigo-600 transition-colors">
-               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5 md:w-6 md:h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
+             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-500 hover:text-indigo-600 active:scale-95 transition-all rounded-xl hover:bg-black/5 dark:hover:bg-white/5">
+               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
              </button>
-             <h2 className="font-bold text-gray-800 dark:text-white truncate text-sm md:text-base max-w-[180px] md:max-w-none">
+             <h2 className="font-bold text-gray-800 dark:text-white truncate text-base md:text-base max-w-[200px] md:max-w-none">
                 {activeChat ? activeChat.title : 'Lumi'}
                 {isLoadingData && <span className="hidden md:inline text-xs font-normal text-indigo-500 ml-2 animate-pulse">(Syncing...)</span>}
              </h2>
            </div>
            
-           <div className="flex items-center gap-2 flex-shrink-0">
-             <button onClick={() => setIsLiveMode(true)} className="p-2 rounded-full bg-gradient-to-r from-red-500 to-pink-500 text-white shadow-lg shadow-pink-500/20 hover:scale-105 active:scale-95 transition-transform" title="Start Live Voice Chat">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 md:w-5 md:h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" /></svg>
+           <div className="flex items-center gap-1 flex-shrink-0">
+             <button onClick={() => setIsLiveMode(true)} className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-gradient-to-r from-red-500 to-pink-500 text-white shadow-lg shadow-pink-500/20 hover:scale-105 active:scale-90 transition-transform" title="Start Live Voice Chat">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" /></svg>
              </button>
            </div>
         </div>
@@ -1070,7 +1070,7 @@ const App: React.FC = () => {
             </div>
           )}
 
-          <div className="absolute inset-0 overflow-y-auto p-4 md:p-8 space-y-4" ref={chatContainerRef} onScroll={handleScroll}>
+          <div className="absolute inset-0 overflow-y-auto px-3 py-4 md:p-8 space-y-4" ref={chatContainerRef} onScroll={handleScroll}>
              {!activeChat ? (
                <div className="h-full flex flex-col items-center justify-center opacity-80 mt-[-50px]">
                   <div className="w-24 h-24 bg-white/50 dark:bg-white/5 rounded-full flex items-center justify-center mb-6 shadow-xl backdrop-blur-md animate-bounce-slow border border-white/20 dark:border-white/10"><img src="https://xcjqilfhlwbykckzdzry.supabase.co/storage/v1/object/public/images/50ad6e29-e72e-4158-b9cf-486ab30c64c5/d7a6feb7-13c3-4823-84ef-913e89786d2d.png" alt="Lumi" className="w-16 h-16 object-contain" /></div>

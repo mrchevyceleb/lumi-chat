@@ -74,7 +74,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = React.memo(({ message
         {/* Bubble */}
         <div 
           className={`
-            relative px-4 py-3 md:px-5 md:py-4 rounded-3xl text-[15px] leading-relaxed shadow-sm break-words overflow-hidden max-w-full
+            relative px-4 py-3 md:px-5 md:py-4 rounded-2xl md:rounded-3xl text-base leading-relaxed shadow-sm break-words overflow-hidden max-w-full
             ${isUser 
               ? 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white rounded-br-sm shadow-lg shadow-indigo-500/20' 
               : 'bg-white/90 dark:bg-slate-800/80 backdrop-blur-md text-gray-800 dark:text-gray-100 rounded-bl-sm border border-white/60 dark:border-white/10 shadow-sm dark:shadow-[0_0_15px_rgba(0,0,0,0.2)]'
