@@ -14,7 +14,9 @@ serve(async (req) => {
 
   if (!apiKey) {
     console.error("GOOGLE_API_KEY not set");
-    return new Response("Internal Server Error", { status: 500 });
+    // Can't return 500 for WebSocket upgrade requests in some environments,
+    // but returning a Response here prevents the upgrade.
+    return new Response("Configuration Error: GOOGLE_API_KEY not set in Supabase Secrets.", { status: 500 });
   }
 
   // Construct the Gemini Live WebSocket URL
@@ -34,29 +36,12 @@ serve(async (req) => {
       console.log("Connected to Gemini");
     };
 
-    clientSocket.onmessage = (e) => {
-      if (geminiSocket.readyState === WebSocket.OPEN) {
-        geminiSocket.send(e.data);
-      }
-    };
-
-    geminiSocket.onmessage = (e) => {
-      if (clientSocket.readyState === WebSocket.OPEN) {
-        clientSocket.send(e.data);
-      }
-    };
-
-    clientSocket.onclose = () => {
-      console.log("Client closed");
-      if (geminiSocket.readyState === WebSocket.OPEN) {
-        geminiSocket.close();
-      }
-    };
-
     geminiSocket.onclose = (e) => {
       console.log("Gemini closed", e.code, e.reason);
+      // Optional: Send a text message to client before closing to explain why?
+      // But typically we just close.
       if (clientSocket.readyState === WebSocket.OPEN) {
-        clientSocket.close();
+        clientSocket.close(1000, "Gemini Closed Connection");
       }
     };
 

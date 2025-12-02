@@ -205,8 +205,10 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
       // 3. Connect to Gemini Live Relay (Edge Function)
       // Construct URL for Supabase Edge Function
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://mwwoahlygzvietmhklvy.supabase.co';
-      // Replace https with wss
-      const wsUrl = `${supabaseUrl.replace('http', 'ws')}/functions/v1/gemini-live-relay?model=gemini-2.0-flash-exp`;
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+      
+      // Replace https with wss and include apikey (needed for Supabase Auth/Gateway)
+      const wsUrl = `${supabaseUrl.replace('http', 'ws')}/functions/v1/gemini-live-relay?model=gemini-2.0-flash-exp&apikey=${anonKey}`;
       
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
