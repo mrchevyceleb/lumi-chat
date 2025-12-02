@@ -1,8 +1,53 @@
-
 import React, { useEffect, useRef, useState } from 'react';
-import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { Persona } from '../types';
 import { AudioUtils } from '../services/audioUtils';
+
+// Types for the raw WebSocket protocol
+interface SetupMessage {
+  setup: {
+    model: string;
+    generationConfig?: {
+        responseModalities?: string[];
+        speechConfig?: {
+            voiceConfig?: {
+                prebuiltVoiceConfig?: {
+                    voiceName: string;
+                }
+            }
+        }
+    };
+    systemInstruction?: {
+        parts: { text: string }[];
+    }
+  }
+}
+
+interface ClientContentMessage {
+    realtimeInput: {
+        mediaChunks: {
+            mimeType: string;
+            data: string; // base64
+        }[];
+    }
+}
+
+interface ServerMessage {
+    serverContent?: {
+        modelTurn?: {
+            parts?: {
+                inlineData?: {
+                    mimeType: string;
+                    data: string;
+                }
+            }[];
+        };
+        turnComplete?: boolean;
+        interrupted?: boolean;
+    };
+    toolCall?: any; // Ignored for now
+    // Live API v1alpha/beta variations:
+    inputAudioTranscription?: { text: string }; // Might be inside serverContent or separate depending on version
+}
 
 interface LiveSessionOverlayProps {
   isOpen: boolean;
@@ -22,7 +67,7 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
 
   // Refs for audio context and session management to persist across renders
   const audioContextsRef = useRef<{ input?: AudioContext, output?: AudioContext }>({});
-  const sessionRef = useRef<Promise<any> | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   
   // Refs for audio nodes to prevent Garbage Collection (Fix for Desktop "Immediate Disconnect")
   const audioProcessingRef = useRef<{
@@ -112,12 +157,10 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
     try { audioContextsRef.current.output?.close(); } catch(e) {}
     audioContextsRef.current = {};
 
-    // Close session
-    if (sessionRef.current) {
-      sessionRef.current.then(session => {
-         try { session.close(); } catch (e) { console.warn("Error closing session (likely already closed)", e); }
-      }).catch(() => {}); // Ignore errors if session connect failed
-      sessionRef.current = null;
+    // Close WebSocket
+    if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
     }
   };
 
@@ -133,11 +176,6 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
     setStatus('connecting');
 
     try {
-      const apiKey = process.env.API_KEY;
-      if (!apiKey) throw new Error("No API Key found. Please set your API Key.");
-
-      const ai = new GoogleGenAI({ apiKey });
-      
       // 1. Setup Audio Contexts
       // Input: 16kHz for Gemini
       const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -164,170 +202,154 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
         throw new Error("Microphone access denied. Please allow microphone permissions.");
       }
       
-      // 3. Connect to Gemini Live
-      // Note: Using the model specified in guidelines. If this fails consistently, it might be due to API tier restrictions.
-      const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-        callbacks: {
-          onopen: () => {
-            // Check if this callback belongs to the active session
-            if (currentSessionIdRef.current !== sessionId) return;
-            
-            if (mountedRef.current) setStatus('connected');
-            
-            // Setup Input Stream (Mic -> ScriptProcessor -> Model)
-            const source = inputCtx.createMediaStreamSource(stream);
-            const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
-            
-            // Store nodes to prevent Garbage Collection
-            audioProcessingRef.current.source = source;
-            audioProcessingRef.current.processor = scriptProcessor;
+      // 3. Connect to Gemini Live Relay (Edge Function)
+      // Construct URL for Supabase Edge Function
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://mwwoahlygzvietmhklvy.supabase.co';
+      // Replace https with wss
+      const wsUrl = `${supabaseUrl.replace('http', 'ws')}/functions/v1/gemini-live-relay?model=gemini-2.0-flash-exp`;
+      
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-            scriptProcessor.onaudioprocess = (e) => {
-              // Strict checks to prevent sending data to closed sessions
-              if (currentSessionIdRef.current !== sessionId) {
-                 // Disconnect on next tick to avoid errors
-                 return;
-              }
-              if (!sessionRef.current) return;
-              
-              const inputData = e.inputBuffer.getChannelData(0);
-              const pcmBlob = AudioUtils.createBlob(inputData);
-              
-              sessionRef.current.then(session => {
-                 try {
-                    session.sendRealtimeInput({ media: pcmBlob });
-                 } catch (err) {
-                    // Ignore send errors, likely session closing
-                 }
-              }).catch(() => {
-                 // Ignore promise errors if session setup failed
-              });
+      ws.onopen = () => {
+        if (currentSessionIdRef.current !== sessionId) return;
+        if (mountedRef.current) setStatus('connected');
+
+        // Send Setup Message
+        const setupMsg: SetupMessage = {
+            setup: {
+                model: "models/gemini-2.0-flash-exp",
+                generationConfig: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: {
+                                voiceName: voiceName
+                            }
+                        }
+                    }
+                },
+                systemInstruction: {
+                    parts: [{ text: `You are acting as the persona: ${persona.name}. ${persona.systemInstruction}. Keep your responses relatively concise and conversational as this is a voice chat.` }]
+                }
+            }
+        };
+        ws.send(JSON.stringify(setupMsg));
+
+        // Setup Audio Input Stream
+        const source = inputCtx.createMediaStreamSource(stream);
+        const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
+        
+        audioProcessingRef.current.source = source;
+        audioProcessingRef.current.processor = scriptProcessor;
+
+        scriptProcessor.onaudioprocess = (e) => {
+            if (currentSessionIdRef.current !== sessionId || ws.readyState !== WebSocket.OPEN) return;
+            
+            const inputData = e.inputBuffer.getChannelData(0);
+            const base64 = AudioUtils.createBlob(inputData).data;
+
+            const msg: ClientContentMessage = {
+                realtimeInput: {
+                    mediaChunks: [{
+                        mimeType: "audio/pcm;rate=16000",
+                        data: base64
+                    }]
+                }
             };
+            ws.send(JSON.stringify(msg));
+        };
 
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(inputCtx.destination);
-          },
-          onmessage: async (message: LiveServerMessage) => {
-             // Check stale
-            if (currentSessionIdRef.current !== sessionId) return;
+        source.connect(scriptProcessor);
+        scriptProcessor.connect(inputCtx.destination);
+      };
 
-            try {
-                // --- Audio Handling ---
-                const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-                if (base64Audio) {
-                  // Reset/Sync time if needed
-                  nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
-
-                  const audioBuffer = await AudioUtils.decodeAudioData(
-                    AudioUtils.decode(base64Audio),
-                    outputCtx,
-                    24000,
-                    1
-                  );
-
-                  const source = outputCtx.createBufferSource();
-                  source.buffer = audioBuffer;
-                  
-                  // Connect to visualizer and output
-                  source.connect(analyser);
-                  analyser.connect(outputCtx.destination);
-
-                  source.addEventListener('ended', () => {
-                    audioSourcesRef.current.delete(source);
-                  });
-
-                  source.start(nextStartTimeRef.current);
-                  nextStartTimeRef.current += audioBuffer.duration;
-                  audioSourcesRef.current.add(source);
-                }
-                
-                // --- Transcription Handling ---
-                
-                // Accumulate Input (User) Transcription
-                if (message.serverContent?.inputTranscription?.text) {
-                   const text = message.serverContent.inputTranscription.text;
-                   inputTranscriptBuffer.current += text;
-                   // Show user text briefly if desired, or wait for model response to show context
-                }
-                
-                // Accumulate Output (Model) Transcription
-                if (message.serverContent?.outputTranscription?.text) {
-                   const text = message.serverContent.outputTranscription.text;
-                   outputTranscriptBuffer.current += text;
-                   setCurrentSubtitle(outputTranscriptBuffer.current); // Show subtitle
-                }
-
-                // Handle Turn Completion (Save to Chat History)
-                if (message.serverContent?.turnComplete) {
-                   // Flush User Input
-                   if (inputTranscriptBuffer.current.trim()) {
-                      onTranscriptRef.current?.(inputTranscriptBuffer.current, 'user');
-                      inputTranscriptBuffer.current = "";
-                   }
-                   
-                   // Flush Model Output
-                   if (outputTranscriptBuffer.current.trim()) {
-                      onTranscriptRef.current?.(outputTranscriptBuffer.current, 'model');
-                      outputTranscriptBuffer.current = "";
-                   }
-                }
-
-                // Handle Interruption
-                if (message.serverContent?.interrupted) {
-                  audioSourcesRef.current.forEach(src => src.stop());
-                  audioSourcesRef.current.clear();
-                  nextStartTimeRef.current = outputCtx.currentTime;
-                  
-                  // If interrupted, flush whatever we have so far?
-                  // Usually interruption means user spoke over model.
-                  // We might want to save the partial model response.
-                  if (outputTranscriptBuffer.current.trim()) {
-                      onTranscriptRef.current?.(outputTranscriptBuffer.current + " [Interrupted]", 'model');
-                      outputTranscriptBuffer.current = "";
-                  }
-                  setCurrentSubtitle(""); 
-                }
-            } catch (err) {
-                console.error("Audio processing error", err);
+      ws.onmessage = async (event) => {
+        if (currentSessionIdRef.current !== sessionId) return;
+        
+        try {
+            let message: ServerMessage;
+            if (event.data instanceof Blob) {
+                 // Handle blob if necessary, but Gemini sends JSON text frames mostly
+                 const text = await event.data.text();
+                 message = JSON.parse(text);
+            } else {
+                 message = JSON.parse(event.data);
             }
-          },
-          onclose: (event) => {
-            console.log("Session closed", event);
-            // Only update status if this is the active session
-            if (currentSessionIdRef.current === sessionId && mountedRef.current) {
-                setStatus('disconnected');
+
+            // --- Audio Handling ---
+            const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+            if (base64Audio) {
+                // Reset/Sync time if needed
+                nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
+
+                const audioBuffer = await AudioUtils.decodeAudioData(
+                  AudioUtils.decode(base64Audio),
+                  outputCtx,
+                  24000,
+                  1
+                );
+
+                const source = outputCtx.createBufferSource();
+                source.buffer = audioBuffer;
+                
+                // Connect to visualizer and output
+                source.connect(analyser);
+                analyser.connect(outputCtx.destination);
+
+                source.addEventListener('ended', () => {
+                  audioSourcesRef.current.delete(source);
+                });
+
+                source.start(nextStartTimeRef.current);
+                nextStartTimeRef.current += audioBuffer.duration;
+                audioSourcesRef.current.add(source);
             }
-          },
-          onerror: (err) => {
-            console.error("Live Error:", err);
-            if (currentSessionIdRef.current === sessionId && mountedRef.current) {
-                setStatus('error');
-                setErrorMessage(err.message || "Connection failed");
+            
+            // --- Transcription Handling ---
+            // Note: Gemini V2 might structure transcription differently.
+            // This structure tries to match what we saw before or common patterns.
+            // Often it comes in "serverContent" or separate tools.
+            // For now, we focus on audio. If transcription is missing, UI just shows "Listening..."
+            
+            // Handle Turn Completion
+            if (message.serverContent?.turnComplete) {
+                // Clear buffers or handle end of turn logic
+                if (inputTranscriptBuffer.current.trim()) {
+                     onTranscriptRef.current?.(inputTranscriptBuffer.current, 'user');
+                     inputTranscriptBuffer.current = "";
+                }
+                if (outputTranscriptBuffer.current.trim()) {
+                     onTranscriptRef.current?.(outputTranscriptBuffer.current, 'model');
+                     outputTranscriptBuffer.current = "";
+                }
             }
-          }
-        },
-        config: {
-          responseModalities: [Modality.AUDIO],
-          inputAudioTranscription: { model: 'gemini-2.5-flash-native-audio-preview-09-2025' },
-          outputAudioTranscription: { model: 'gemini-2.5-flash-native-audio-preview-09-2025' },
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } }
-          },
-          systemInstruction: `You are acting as the persona: ${persona.name}. ${persona.systemInstruction}. Keep your responses relatively concise and conversational as this is a voice chat.`,
+
+            if (message.serverContent?.interrupted) {
+                audioSourcesRef.current.forEach(src => src.stop());
+                audioSourcesRef.current.clear();
+                nextStartTimeRef.current = outputCtx.currentTime;
+                setCurrentSubtitle(""); 
+            }
+
+        } catch (err) {
+            console.error("Message processing error", err);
         }
-      });
-      
-      sessionRef.current = sessionPromise;
-      
-      // Catch initial connection failures
-      sessionPromise.catch(err => {
-         console.error("Session connection failed:", err);
+      };
+
+      ws.onclose = () => {
+         if (currentSessionIdRef.current === sessionId && mountedRef.current) {
+            setStatus('disconnected');
+         }
+      };
+
+      ws.onerror = (err) => {
+         console.error("WebSocket Error:", err);
          if (currentSessionIdRef.current === sessionId && mountedRef.current) {
             setStatus('error');
-            setErrorMessage("Could not connect to model. Please check API Key/Access.");
+            setErrorMessage("Connection failed");
          }
-      });
+      };
 
     } catch (e: any) {
       if (currentSessionIdRef.current === sessionId) {

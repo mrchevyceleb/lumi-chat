@@ -58,7 +58,7 @@ serve(async (req) => {
 
     // Create model with config
     const model = genAI.getGenerativeModel({
-      model: modelId || "gemini-2.5-flash",
+      model: modelId || "gemini-2.0-flash-exp",
       systemInstruction: systemInstruction,
       tools: tools.length > 0 ? tools : undefined,
     });
