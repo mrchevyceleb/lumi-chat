@@ -465,6 +465,85 @@ const App: React.FC = () => {
     isAtBottomRef.current = true;
   };
 
+  // --- Handle Call End: Send all transcripts to chat ---
+  const handleCallEnd = async (transcripts: Array<{ text: string; role: 'user' | 'model' }>) => {
+    if (!transcripts || transcripts.length === 0) return;
+
+    let chatId = activeChatId;
+    let currentChatList = [...chats];
+    let isNewChat = false;
+
+    // If no active chat, create one for the voice session
+    if (!chatId) {
+       const newChatId = uuidv4();
+       const firstUserMessage = transcripts.find(t => t.role === 'user')?.text || '';
+       const newChat: ChatSession = {
+           id: newChatId,
+           title: firstUserMessage.slice(0, 60) || "Voice Chat", 
+           isPinned: false,
+           messages: [],
+           personaId: currentPersona.id,
+           lastUpdated: Date.now()
+       };
+       chatId = newChatId;
+       currentChatList = [newChat, ...chats];
+       setChats(currentChatList);
+       setActiveChatId(chatId);
+       isNewChat = true;
+       setIsSidebarOpen(false);
+       await dbService.createChat(newChat);
+    }
+
+    // Get current chat to check for existing messages
+    const currentChat = currentChatList.find(c => c.id === chatId);
+    if (!currentChat) return;
+
+    // Create messages from transcripts
+    const messagesToAdd: Message[] = transcripts
+      .filter(t => t.text.trim())
+      .map(t => ({
+        id: uuidv4(),
+        role: t.role,
+        content: t.text.trim(),
+        timestamp: Date.now(),
+        type: 'text' as const
+      }));
+
+    if (messagesToAdd.length === 0) return;
+
+    // Add all messages to the chat
+    setChats(prev => prev.map(c => {
+        if (c.id === chatId) {
+            // Merge with existing messages, avoiding duplicates based on content
+            const existingContents = new Set(c.messages.map(m => m.content));
+            const newMessages = messagesToAdd.filter(m => !existingContents.has(m.content));
+            
+            return {
+                ...c,
+                messages: [...c.messages, ...newMessages],
+                lastUpdated: Date.now()
+            };
+        }
+        return c;
+    }));
+
+    // Save messages to database
+    for (const msg of messagesToAdd) {
+      const existingChat = chats.find(c => c.id === chatId);
+      if (existingChat) {
+        const existingContents = new Set(existingChat.messages.map(m => m.content));
+        if (!existingContents.has(msg.content)) {
+          await dbService.addMessage(chatId, msg);
+        }
+      } else {
+        await dbService.addMessage(chatId, msg);
+      }
+    }
+
+    isAtBottomRef.current = true;
+    setTimeout(() => scrollToBottom('smooth'), 100);
+  };
+
   // --- NEW: Handle Send Message (Receives data from ChatInput) ---
   const handleSendMessage = async (text: string, files: any[], useSearch: boolean, responseLength: 'concise' | 'detailed', isVoiceActive: boolean, modelId: ModelId, personaId: string) => {
     
@@ -859,7 +938,8 @@ const App: React.FC = () => {
         onClose={() => setIsLiveMode(false)} 
         persona={currentPersona} 
         voiceName={voiceName}
-        onTranscript={handleLiveTranscript} // Pass the handler
+        onTranscript={handleLiveTranscript} // Pass the handler for incremental updates
+        onCallEnd={handleCallEnd} // Pass the handler for sending all transcripts when call ends
       />
       
       <SettingsModal 

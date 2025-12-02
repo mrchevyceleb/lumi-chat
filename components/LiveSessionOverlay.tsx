@@ -49,15 +49,21 @@ interface ServerMessage {
     inputAudioTranscription?: { text: string }; // Might be inside serverContent or separate depending on version
 }
 
+interface TranscriptEntry {
+  text: string;
+  role: 'user' | 'model';
+}
+
 interface LiveSessionOverlayProps {
   isOpen: boolean;
   onClose: () => void;
   persona: Persona;
   voiceName: string;
   onTranscript?: (text: string, role: 'user' | 'model') => void;
+  onCallEnd?: (transcripts: TranscriptEntry[]) => void;
 }
 
-export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, onClose, persona, voiceName, onTranscript }) => {
+export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, onClose, persona, voiceName, onTranscript, onCallEnd }) => {
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
   const [volume, setVolume] = useState(0); // 0 to 100 for visualizer
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -89,9 +95,16 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
   const inputTranscriptBuffer = useRef<string>("");
   const outputTranscriptBuffer = useRef<string>("");
   
+  // Track all transcripts during the call
+  const allTranscriptsRef = useRef<TranscriptEntry[]>([]);
+  
   // Keep onTranscript prop up-to-date in refs to avoid stale closures in Live API callbacks
   const onTranscriptRef = useRef(onTranscript);
   useEffect(() => { onTranscriptRef.current = onTranscript; }, [onTranscript]);
+  
+  // Keep onCallEnd prop up-to-date in refs
+  const onCallEndRef = useRef(onCallEnd);
+  useEffect(() => { onCallEndRef.current = onCallEnd; }, [onCallEnd]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -135,6 +148,26 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
   }, [isOpen, status]);
 
   const cleanup = () => {
+    // Send any remaining buffered transcripts before cleanup
+    const remainingTranscripts: TranscriptEntry[] = [];
+    if (inputTranscriptBuffer.current.trim()) {
+      remainingTranscripts.push({ text: inputTranscriptBuffer.current.trim(), role: 'user' });
+    }
+    if (outputTranscriptBuffer.current.trim()) {
+      remainingTranscripts.push({ text: outputTranscriptBuffer.current.trim(), role: 'model' });
+    }
+    
+    // Combine all transcripts and send them when call ends
+    const allTranscripts = [...allTranscriptsRef.current, ...remainingTranscripts];
+    if (allTranscripts.length > 0 && onCallEndRef.current) {
+      onCallEndRef.current(allTranscripts);
+    }
+    
+    // Clear transcripts for next session
+    allTranscriptsRef.current = [];
+    inputTranscriptBuffer.current = "";
+    outputTranscriptBuffer.current = "";
+
     // Invalidate current session ID
     currentSessionIdRef.current = "";
 
@@ -172,6 +205,7 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
     // Clear transcription buffers
     inputTranscriptBuffer.current = "";
     outputTranscriptBuffer.current = "";
+    allTranscriptsRef.current = [];
     
     setStatus('connecting');
 
@@ -309,20 +343,38 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
             }
             
             // --- Transcription Handling ---
-            // Note: Gemini V2 might structure transcription differently.
-            // This structure tries to match what we saw before or common patterns.
-            // Often it comes in "serverContent" or separate tools.
-            // For now, we focus on audio. If transcription is missing, UI just shows "Listening..."
+            // Extract transcripts from various possible message formats
+            // User input transcription
+            if (message.inputAudioTranscription?.text) {
+                inputTranscriptBuffer.current += message.inputAudioTranscription.text + " ";
+            }
+            // Check for transcription in serverContent
+            if (message.serverContent?.modelTurn?.parts) {
+                for (const part of message.serverContent.modelTurn.parts) {
+                    if (part.text) {
+                        outputTranscriptBuffer.current += part.text + " ";
+                        setCurrentSubtitle(part.text);
+                    }
+                }
+            }
+            // Check for separate transcription fields
+            if ((message as any).transcription?.text) {
+                inputTranscriptBuffer.current += (message as any).transcription.text + " ";
+            }
             
             // Handle Turn Completion
             if (message.serverContent?.turnComplete) {
                 // Clear buffers or handle end of turn logic
                 if (inputTranscriptBuffer.current.trim()) {
-                     onTranscriptRef.current?.(inputTranscriptBuffer.current, 'user');
+                     const text = inputTranscriptBuffer.current.trim();
+                     onTranscriptRef.current?.(text, 'user');
+                     allTranscriptsRef.current.push({ text, role: 'user' });
                      inputTranscriptBuffer.current = "";
                 }
                 if (outputTranscriptBuffer.current.trim()) {
-                     onTranscriptRef.current?.(outputTranscriptBuffer.current, 'model');
+                     const text = outputTranscriptBuffer.current.trim();
+                     onTranscriptRef.current?.(text, 'model');
+                     allTranscriptsRef.current.push({ text, role: 'model' });
                      outputTranscriptBuffer.current = "";
                 }
             }
