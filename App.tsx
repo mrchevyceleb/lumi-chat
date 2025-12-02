@@ -361,6 +361,11 @@ const App: React.FC = () => {
     setActiveChatId(chatId);
   };
 
+  const handleSelectChat = (chatId: string) => {
+    setActiveChatId(chatId);
+    setIsSidebarOpen(false); // Close sidebar when selecting a chat
+  };
+
   const handleTabContextMenu = (e: React.MouseEvent, chatId: string) => {
     e.preventDefault();
     setTabContextMenu({
@@ -664,7 +669,8 @@ const App: React.FC = () => {
          }
        }
        
-       ragContext = await ragService.getRagContext(text, chatId!, conversationSummary);
+       const conversationLength = updatedChat?.messages.length || 0;
+       ragContext = await ragService.getRagContext(text, chatId!, conversationSummary, conversationLength);
     }
 
     // 2. Title Gen - use AI-only title (no persona prefix)
@@ -980,7 +986,7 @@ const App: React.FC = () => {
 
       <Sidebar 
         chats={chats} folders={folders} personas={personas} activeChatId={activeChatId}
-        onSelectChat={setActiveChatId} onNewChat={() => createNewChat()} onCreateFolder={handleCreateFolder}
+        onSelectChat={handleSelectChat} onNewChat={() => createNewChat()} onCreateFolder={handleCreateFolder}
         onMoveChat={handleMoveChat} onDeleteChat={handleDeleteChat} onRenameChat={handleRenameChat}
         onTogglePin={handleTogglePin} onRenameFolder={handleRenameFolder} onDeleteFolder={handleDeleteFolder}
         onNewChatInFolder={(fid) => createNewChat(undefined, fid)} isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen}

@@ -213,17 +213,82 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {/* Default Model Settings */}
                 <div>
                   <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Default Model</h3>
-                  <select
-                    value={defaultModel}
-                    onChange={(e) => setDefaultModel(e.target.value as ModelId)}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-xl text-sm text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none"
-                  >
-                    {AVAILABLE_MODELS.map(model => (
-                      <option key={model.id} value={model.id}>
-                        {model.name} - {model.description}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="space-y-2 max-h-[280px] overflow-y-auto custom-scrollbar pr-1">
+                    {AVAILABLE_MODELS.map(model => {
+                      const isSelected = defaultModel === model.id;
+                      // Color-code by cost tier
+                      const costTier = model.costInput < 0.2 ? 'budget' : model.costInput < 2 ? 'standard' : 'premium';
+                      const tierColors = {
+                        budget: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800',
+                        standard: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800',
+                        premium: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800'
+                      };
+                      const tierBadgeColors = {
+                        budget: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
+                        standard: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400',
+                        premium: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400'
+                      };
+                      
+                      return (
+                        <button
+                          key={model.id}
+                          onClick={() => setDefaultModel(model.id)}
+                          className={`w-full p-3 rounded-xl border-2 text-left transition-all ${
+                            isSelected 
+                              ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 ring-2 ring-indigo-500/20' 
+                              : `${tierColors[costTier]} hover:border-gray-300 dark:hover:border-slate-500`
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className={`font-semibold text-sm ${isSelected ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-800 dark:text-gray-200'}`}>
+                                  {model.name}
+                                </span>
+                                {isSelected && (
+                                  <svg className="w-4 h-4 text-indigo-600 dark:text-indigo-400" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                  </svg>
+                                )}
+                              </div>
+                              <p className={`text-xs mt-0.5 ${isSelected ? 'text-indigo-600/70 dark:text-indigo-400/70' : 'text-gray-500 dark:text-gray-400'}`}>
+                                {model.description}
+                              </p>
+                            </div>
+                            <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${tierBadgeColors[costTier]}`}>
+                                {costTier === 'budget' ? '💰 Budget' : costTier === 'standard' ? '⚡ Standard' : '🔥 Premium'}
+                              </span>
+                            </div>
+                          </div>
+                          <div className={`mt-2 pt-2 border-t ${isSelected ? 'border-indigo-200 dark:border-indigo-700' : 'border-gray-200 dark:border-slate-600'}`}>
+                            <div className="flex items-center justify-between text-[10px]">
+                              <div className={`flex items-center gap-3 ${isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                                <span className="flex items-center gap-1">
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
+                                  </svg>
+                                  ${model.costInput.toFixed(2)}/1M
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                                  </svg>
+                                  ${model.costOutput.toFixed(2)}/1M
+                                </span>
+                              </div>
+                              <span className={`font-mono ${isSelected ? 'text-indigo-500 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500'}`}>
+                                ~${((model.costInput + model.costOutput) / 2).toFixed(2)}/1M avg
+                              </span>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2 text-center">
+                    Prices are per 1 million tokens. Input = your messages, Output = AI responses.
+                  </p>
                 </div>
 
                 {/* Voice Settings */}

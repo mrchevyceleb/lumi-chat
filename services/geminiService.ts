@@ -55,6 +55,81 @@ export const previewVoice = async (voiceName: string): Promise<string | null> =>
   }
 };
 
+// Model-specific context window configurations
+// Smaller windows for expensive models to control costs
+const MODEL_CONTEXT_CONFIGS: Record<string, { maxMessages: number; maxContextChars: number; minRecentMessages: number }> = {
+  // Premium models - smaller context to control costs
+  'o1': { maxMessages: 10, maxContextChars: 16000, minRecentMessages: 4 },
+  'o1-mini': { maxMessages: 12, maxContextChars: 20000, minRecentMessages: 4 },
+  'gemini-3-pro-preview': { maxMessages: 14, maxContextChars: 24000, minRecentMessages: 6 },
+  'gpt-5.1': { maxMessages: 16, maxContextChars: 28000, minRecentMessages: 6 },
+  // Standard models - balanced context
+  'gpt-5-mini': { maxMessages: 20, maxContextChars: 32000, minRecentMessages: 6 },
+  'gemini-2.5-flash': { maxMessages: 24, maxContextChars: 40000, minRecentMessages: 6 },
+  // Budget models - larger context is affordable
+  'gpt-5-nano': { maxMessages: 30, maxContextChars: 48000, minRecentMessages: 8 },
+  'gemini-flash-lite-latest': { maxMessages: 30, maxContextChars: 48000, minRecentMessages: 8 },
+};
+
+// Default configuration for unknown models
+const DEFAULT_CONTEXT_CONFIG = {
+  maxMessages: 20,
+  maxContextChars: 32000,
+  minRecentMessages: 6,
+};
+
+/**
+ * Gets the appropriate context window config for a model.
+ * Expensive models get smaller windows to save costs.
+ */
+function getContextConfigForModel(modelId: string): typeof DEFAULT_CONTEXT_CONFIG {
+  return MODEL_CONTEXT_CONFIGS[modelId] || DEFAULT_CONTEXT_CONFIG;
+}
+
+/**
+ * Truncates conversation history to a reasonable window size.
+ * Prioritizes recent messages while respecting token limits.
+ * Uses model-specific limits to optimize costs.
+ */
+function getContextWindow(messages: Message[], modelId: string): Message[] {
+  const config = getContextConfigForModel(modelId);
+  
+  if (messages.length <= config.minRecentMessages) {
+    return messages;
+  }
+
+  // Start with the most recent messages
+  let selectedMessages: Message[] = [];
+  let totalChars = 0;
+  
+  // Work backwards from most recent, always including minimum recent messages
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    const msgChars = msg.content.length;
+    
+    // Always include minimum recent messages
+    const isMinimumRecent = selectedMessages.length < config.minRecentMessages;
+    
+    // Check if we'd exceed limits
+    const wouldExceedMessages = selectedMessages.length >= config.maxMessages;
+    const wouldExceedChars = totalChars + msgChars > config.maxContextChars;
+    
+    if (!isMinimumRecent && (wouldExceedMessages || wouldExceedChars)) {
+      break;
+    }
+    
+    selectedMessages.unshift(msg);
+    totalChars += msgChars;
+  }
+  
+  // Log truncation for debugging
+  if (selectedMessages.length < messages.length) {
+    console.log(`📝 Context window (${modelId}): Using ${selectedMessages.length}/${messages.length} messages (~${Math.round(totalChars/4)} tokens)`);
+  }
+  
+  return selectedMessages;
+}
+
 export const streamChatResponse = async (
   messages: Message[],
   persona: Persona,
@@ -77,7 +152,10 @@ export const streamChatResponse = async (
     systemInstruction += "\n\nIMPORTANT: Please provide a detailed, comprehensive, and in-depth response. Explain your reasoning where applicable.";
   }
 
-  const validMessages = messages.filter(m => m.content.trim() !== '');
+  // Apply context window to prevent sending entire conversation history
+  // Uses model-specific limits (expensive models get smaller windows)
+  const windowedMessages = getContextWindow(messages, modelId);
+  const validMessages = windowedMessages.filter(m => m.content.trim() !== '');
 
   // Prepare request body
   const requestBody = {

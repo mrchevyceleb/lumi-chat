@@ -90,34 +90,29 @@ export interface ModelConfig {
 }
 
 export const AVAILABLE_MODELS: ModelConfig[] = [
+  // Budget Tier - Most affordable
   { 
-    id: 'gemini-2.5-flash', 
-    name: 'Gemini 2.5 Flash', 
-    description: 'Fast, efficient, low latency.', 
-    costInput: 0.075, 
-    costOutput: 0.30 
+    id: 'gpt-5-nano', 
+    name: 'GPT-5 Nano', 
+    description: 'Ultra-low cost, basic tasks.', 
+    costInput: 0.05, 
+    costOutput: 0.40 
   },
   {
     id: 'gemini-flash-lite-latest',
     name: 'Gemini 2.0 Flash-Lite',
-    description: 'Super fast & cost-effective.',
-    costInput: 0.075,
-    costOutput: 0.30
+    description: 'Super fast & lightweight.',
+    costInput: 0.10,
+    costOutput: 0.40
   },
   { 
-    id: 'gemini-3-pro-preview', 
-    name: 'Gemini 3 Pro', 
-    description: 'High intelligence & reasoning.', 
-    costInput: 2.50, 
-    costOutput: 10.00 
+    id: 'gemini-2.5-flash', 
+    name: 'Gemini 2.5 Flash', 
+    description: 'Optimized speed & quality.', 
+    costInput: 0.15, 
+    costOutput: 3.50 
   },
-  { 
-    id: 'gpt-5.1', 
-    name: 'GPT-5.1', 
-    description: 'Flagship model for coding & reasoning.', 
-    costInput: 1.25, 
-    costOutput: 10.00 
-  },
+  // Standard Tier - Balanced
   { 
     id: 'gpt-5-mini', 
     name: 'GPT-5 Mini', 
@@ -126,24 +121,32 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     costOutput: 2.00 
   },
   { 
-    id: 'gpt-5-nano', 
-    name: 'GPT-5 Nano', 
-    description: 'Ultra-fast, most affordable.', 
-    costInput: 0.05, 
-    costOutput: 0.40 
+    id: 'o1-mini', 
+    name: 'o3-mini', 
+    description: 'Efficient reasoning model.', 
+    costInput: 1.10, 
+    costOutput: 4.40 
   },
+  { 
+    id: 'gpt-5.1', 
+    name: 'GPT-5', 
+    description: 'General purpose flagship.', 
+    costInput: 1.25, 
+    costOutput: 10.00 
+  },
+  // Premium Tier - High capability
   { 
     id: 'o1', 
-    name: 'ChatGPT o1', 
-    description: 'Deep research & reasoning.', 
-    costInput: 15.00, 
-    costOutput: 60.00 
+    name: 'o3 (Reasoning)', 
+    description: 'STEM & code specialist.', 
+    costInput: 2.00, 
+    costOutput: 8.00 
   },
   { 
-    id: 'o1-mini', 
-    name: 'ChatGPT o1-mini', 
-    description: 'Compact deep research model.', 
-    costInput: 3.00, 
+    id: 'gemini-3-pro-preview', 
+    name: 'Gemini 3 Pro', 
+    description: 'Flagship preview model.', 
+    costInput: 2.00, 
     costOutput: 12.00 
   }
 ];
