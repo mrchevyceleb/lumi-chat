@@ -14,6 +14,9 @@ interface ChatInputProps {
   onEditPersona: (persona: Persona) => void;
   onDeletePersona: (personaId: string) => void;
   defaultModel: ModelId;
+  activeChatModelId?: ModelId; // Conversation-specific model
+  activeChatUseSearch?: boolean; // Conversation-specific web search
+  onSaveChatSettings?: (modelId: ModelId, useSearch: boolean) => void; // Callback to save settings
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({ 
@@ -26,15 +29,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onCreatePersona,
   onEditPersona,
   onDeletePersona,
-  defaultModel
+  defaultModel,
+  activeChatModelId,
+  activeChatUseSearch,
+  onSaveChatSettings
 }) => {
   const [input, setInput] = useState('');
   const [attachedFiles, setAttachedFiles] = useState<{name: string, data: string, mimeType: string, isTextContext?: boolean}[]>([]);
   const [useSearch, setUseSearch] = useState(false);
   const [responseLength, setResponseLength] = useState<'concise' | 'detailed'>('detailed');
   const [isListening, setIsListening] = useState(false);
-  // Default to the defaultModel prop or first available model
-  const [selectedModel, setSelectedModel] = useState<ModelId>(defaultModel || AVAILABLE_MODELS[0].id);
+  // Use conversation-specific model if available, otherwise default model
+  const [selectedModel, setSelectedModel] = useState<ModelId>(activeChatModelId || defaultModel || AVAILABLE_MODELS[0].id);
   
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showPersonaMenu, setShowPersonaMenu] = useState(false);
@@ -51,12 +57,35 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const personaMenuRef = useRef<HTMLDivElement>(null);
   const mobileOptionsRef = useRef<HTMLDivElement>(null); // NEW: Ref for mobile menu
 
-  // Sync selected model with default model from settings when it changes
+  // Sync selected model with conversation-specific or default model when they change
   useEffect(() => {
-    if (defaultModel && AVAILABLE_MODELS.some(m => m.id === defaultModel)) {
-      setSelectedModel(defaultModel);
+    const modelToUse = activeChatModelId || defaultModel;
+    if (modelToUse && AVAILABLE_MODELS.some(m => m.id === modelToUse)) {
+      setSelectedModel(modelToUse);
     }
-  }, [defaultModel]);
+  }, [activeChatModelId, defaultModel]);
+
+  // Sync useSearch with conversation-specific setting when it changes
+  useEffect(() => {
+    if (activeChatUseSearch !== undefined) {
+      setUseSearch(activeChatUseSearch);
+    }
+  }, [activeChatUseSearch]);
+
+  // Helper functions to handle model and search changes with persistence
+  const handleModelChange = (modelId: ModelId) => {
+    setSelectedModel(modelId);
+    if (onSaveChatSettings) {
+      onSaveChatSettings(modelId, useSearch);
+    }
+  };
+
+  const handleSearchToggle = (newValue: boolean) => {
+    setUseSearch(newValue);
+    if (onSaveChatSettings) {
+      onSaveChatSettings(selectedModel, newValue);
+    }
+  };
 
   // --- Close menus on click outside
   useEffect(() => {
@@ -307,7 +336,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                                {AVAILABLE_MODELS.map(model => (
                                  <button
                                    key={model.id}
-                                   onClick={() => { setSelectedModel(model.id); setShowMobileOptions(false); }}
+                                   onClick={() => { handleModelChange(model.id); setShowMobileOptions(false); }}
                                    className={`w-full text-left px-2 py-1.5 rounded-lg text-xs transition-colors flex items-center justify-between ${selectedModel === model.id ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
                                  >
                                    <span>{model.name}</span>
@@ -341,7 +370,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                              <div className="text-xs font-bold text-gray-400 uppercase mb-1">Tools</div>
                              <div className="flex flex-col gap-1">
                                <button 
-                                 onClick={() => { setUseSearch(!useSearch); setShowMobileOptions(false); }}
+                                 onClick={() => { handleSearchToggle(!useSearch); setShowMobileOptions(false); }}
                                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${useSearch ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
                                >
                                  <span className="text-lg">🌍</span>
@@ -391,7 +420,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
                    {/* Google Search Toggle - Hidden on mobile */}
                    <button 
-                     onClick={() => setUseSearch(!useSearch)}
+                     onClick={() => handleSearchToggle(!useSearch)}
                      className={`hidden md:block p-2 md:p-3 transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 ${useSearch ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500'}`}
                      title="Toggle Google Search"
                    >
@@ -522,7 +551,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             {AVAILABLE_MODELS.map(model => (
                               <button
                                 key={model.id}
-                                onClick={() => { setSelectedModel(model.id); setShowModelMenu(false); }}
+                                onClick={() => { handleModelChange(model.id); setShowModelMenu(false); }}
                                 className={`w-full text-left p-2 rounded-lg text-xs transition-colors flex flex-col ${selectedModel === model.id ? 'bg-indigo-50 dark:bg-slate-700' : 'hover:bg-gray-50 dark:hover:bg-slate-700'}`}
                               >
                                 <div className="flex items-center justify-between">

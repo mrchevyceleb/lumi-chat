@@ -8,7 +8,7 @@ import { ChatInput } from './components/ChatInput'; // New Import
 import { streamChatResponse, generateChatTitle, InvalidApiKeyError } from './services/geminiService';
 import { ChatSession, Folder, Message, Persona, DEFAULT_PERSONA, CODING_PERSONA, ModelId, AVAILABLE_MODELS } from './types';
 import { LiveSessionOverlay } from './components/LiveSessionOverlay';
-import { supabase } from './services/supabaseClient';
+import { supabase, attemptSessionRecovery, isAuthError } from './services/supabaseClient';
 import { dbService, UsageStats } from './services/dbService';
 import { ragService } from './services/ragService'; // Import RAG Service
 import { AuthOverlay } from './components/AuthOverlay';
@@ -178,35 +178,102 @@ const App: React.FC = () => {
   useEffect(() => {
     const checkUser = async () => {
       setIsAuthChecking(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      setSession(session);
-      setIsAuthChecking(false);
       
-      if (session) {
-        loadUserData();
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        // If there's a session error or the session is invalid, try to recover
+        if (error || !session) {
+          console.log('No valid session found, checking for recoverable session...');
+          const recovered = await attemptSessionRecovery();
+          if (recovered) {
+            const { data: { session: newSession } } = await supabase.auth.getSession();
+            setSession(newSession);
+            if (newSession) {
+              loadUserData();
+            }
+          } else {
+            setSession(null);
+          }
+        } else {
+          setSession(session);
+          loadUserData();
+        }
+      } catch (e) {
+        console.error('Auth check failed:', e);
+        setSession(null);
       }
+      
+      setIsAuthChecking(false);
     };
     checkUser();
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'TOKEN_REFRESHED') return;
-
-      setSession(session);
-      if (session) {
-        loadUserData();
-      } else {
-        // Clear state on logout
+      console.log('Auth state changed:', event);
+      
+      if (event === 'TOKEN_REFRESHED') {
+        console.log('Token refreshed successfully');
+        return;
+      }
+      
+      if (event === 'SIGNED_OUT') {
+        // Clear all state on logout
         setChats([]);
         setFolders([]);
         setPersonas(INITIAL_PERSONAS);
         setActiveChatId(null);
         setOpenTabs([]);
         setUsageStats({ inputTokens: 0, outputTokens: 0, modelBreakdown: {} });
+        // Clear caches
+        localStorage.removeItem('lumi_chats_cache');
+        localStorage.removeItem('lumi_folders_cache');
+        localStorage.removeItem('lumi_active_chat');
+      }
+
+      setSession(session);
+      if (session) {
+        loadUserData();
       }
     });
 
-    return () => subscription.unsubscribe();
+    // Periodic session validation (every 5 minutes) - critical for PWAs
+    const sessionCheckInterval = setInterval(async () => {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (!currentSession && session) {
+        // Session expired, try to recover
+        console.log('Session expired during use, attempting recovery...');
+        const recovered = await attemptSessionRecovery();
+        if (!recovered) {
+          setSession(null);
+        }
+      }
+    }, 5 * 60 * 1000); // Every 5 minutes
+
+    // Listen for auth error messages from the service worker
+    const handleServiceWorkerMessage = async (event: MessageEvent) => {
+      if (event.data && event.data.type === 'AUTH_ERROR') {
+        console.warn('Service worker detected auth error:', event.data);
+        // Try to recover the session
+        const recovered = await attemptSessionRecovery();
+        if (!recovered) {
+          // Force re-login
+          setSession(null);
+        }
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+    }
+
+    return () => {
+      subscription.unsubscribe();
+      clearInterval(sessionCheckInterval);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+      }
+    };
   }, []);
 
 
@@ -238,8 +305,21 @@ const App: React.FC = () => {
         setPersonas(allPersonas);
         setChats(fetchedChats);
         setUsageStats(fetchedUsage);
-    } catch (error) {
+    } catch (error: any) {
         console.error("Failed to load data", error);
+        
+        // If it's an auth error (401/403), the session is invalid
+        if (isAuthError(error)) {
+          console.warn('Auth error during data load, attempting recovery...');
+          const recovered = await attemptSessionRecovery();
+          if (!recovered) {
+            // Force re-login
+            setSession(null);
+          } else {
+            // Retry loading data after recovery
+            loadUserData();
+          }
+        }
     } finally {
         setIsLoadingData(false);
     }
@@ -248,9 +328,17 @@ const App: React.FC = () => {
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setIsSettingsOpen(false);
-    // Clear cache
+    
+    // Clear localStorage caches
     localStorage.removeItem('lumi_chats_cache');
     localStorage.removeItem('lumi_folders_cache');
+    localStorage.removeItem('lumi_active_chat');
+    localStorage.removeItem('lumi-auth-token');
+    
+    // Tell service worker to clear its caches for a clean slate
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_CACHE' });
+    }
   };
 
   useEffect(() => {
@@ -321,6 +409,21 @@ const App: React.FC = () => {
   };
 
   const getActiveChat = () => chats.find(c => c.id === activeChatId);
+
+  // Handler to save conversation-specific settings
+  const handleSaveChatSettings = async (modelId: ModelId, useSearch: boolean) => {
+    if (!activeChatId) return;
+    
+    // Update local state immediately for responsive UI
+    setChats(prev => prev.map(c => 
+      c.id === activeChatId 
+        ? { ...c, modelId, useSearch }
+        : c
+    ));
+    
+    // Save to database
+    await dbService.updateChat(activeChatId, { modelId, useSearch });
+  };
 
   // --- Actions ---
 
@@ -1100,6 +1203,9 @@ const App: React.FC = () => {
           onEditPersona={startEditingPersona}
           onDeletePersona={handleDeletePersona}
           defaultModel={defaultModel}
+          activeChatModelId={activeChat?.modelId}
+          activeChatUseSearch={activeChat?.useSearch}
+          onSaveChatSettings={handleSaveChatSettings}
         />
 
       </div>

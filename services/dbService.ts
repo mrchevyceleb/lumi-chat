@@ -221,7 +221,9 @@ export const dbService = {
             isPinned: c.is_pinned,
             personaId: c.persona_id,
             lastUpdated: toTimestamp(c.last_updated),
-            messages: chatMsgs
+            messages: chatMsgs,
+            modelId: c.model_id || undefined,
+            useSearch: c.use_search || false
         };
     });
   },
@@ -233,7 +235,9 @@ export const dbService = {
         folder_id: chat.folderId || null,
         is_pinned: chat.isPinned,
         persona_id: chat.personaId,
-        last_updated: toTimestamp(chat.lastUpdated)
+        last_updated: toTimestamp(chat.lastUpdated),
+        model_id: chat.modelId || null,
+        use_search: chat.useSearch || false
     }]);
     if (error) logError("Create chat error", error);
   },
@@ -249,6 +253,8 @@ export const dbService = {
     }
     
     if (updates.personaId !== undefined) payload.persona_id = updates.personaId;
+    if (updates.modelId !== undefined) payload.model_id = updates.modelId || null;
+    if (updates.useSearch !== undefined) payload.use_search = updates.useSearch;
 
     const { error } = await supabase.from('chats').update(payload).eq('id', chatId);
     if (error) logError("Update chat error", error);
