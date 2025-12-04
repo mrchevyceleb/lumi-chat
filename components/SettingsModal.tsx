@@ -1,6 +1,4 @@
-
-
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { UsageStats } from '../services/dbService';
 import { AVAILABLE_MODELS, ModelId } from '../types';
 import { previewVoice } from '../services/geminiService';
@@ -41,7 +39,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   // Cleanup audio when modal closes
-  React.useEffect(() => {
+  useEffect(() => {
     if (!isOpen) {
       if (currentSourceRef.current) {
         try { currentSourceRef.current.stop(); } catch (e) {}
@@ -54,16 +52,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handlePreview = async (name: string, e: React.MouseEvent) => {
     e.stopPropagation();
     
-    // Stop current if playing
+    // If clicking the same voice that's currently playing, stop it (toggle behavior)
+    if (playingVoice === name && currentSourceRef.current) {
+      try {
+        currentSourceRef.current.stop();
+      } catch (e) {}
+      currentSourceRef.current = null;
+      setPlayingVoice(null);
+      return;
+    }
+    
+    // Stop current if playing a different voice
     if (currentSourceRef.current) {
       try {
         currentSourceRef.current.stop();
       } catch (e) {}
       currentSourceRef.current = null;
       setPlayingVoice(null);
-      
-      // If clicking the same voice, just stop (toggle behavior)
-      if (playingVoice === name) return;
     }
 
     try {
@@ -75,10 +80,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const ctx = audioContextRef.current;
       if (ctx.state === 'suspended') await ctx.resume();
 
+      // Call the server-side TTS using Gemini 2.5 Flash Preview TTS model
       const base64Audio = await previewVoice(name);
       
       if (!base64Audio) {
           setPlayingVoice(null);
+          alert('Failed to load voice preview. Please try again.');
           return;
       }
 
@@ -97,10 +104,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       currentSourceRef.current = source;
       source.start();
 
-    } catch (err) {
+    } catch (err: any) {
       console.error("Preview failed", err);
       setPlayingVoice(null);
       currentSourceRef.current = null;
+      
+      // Show user-friendly error message
+      const errorMsg = err?.message || err?.error?.message || 'Failed to preview voice';
+      alert(`Voice preview error: ${errorMsg}`);
     }
   };
 
@@ -377,10 +388,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Model Breakdown</h3>
                     <div className="space-y-3">
                        {breakdownEntries.map(([modelId, stats]) => {
-                         const modelName = AVAILABLE_MODELS.find(m => m.id === modelId)?.name || modelId;
-                         const modelCostConfig = AVAILABLE_MODELS.find(m => m.id === modelId);
-                         const mCost = modelCostConfig 
-                            ? (stats.input / 1000000) * modelCostConfig.costInput + (stats.output / 1000000) * modelCostConfig.costOutput
+                         const modelConfig = AVAILABLE_MODELS.find(m => m.id === modelId);
+                         const modelName = modelConfig?.name || modelId;
+                         const mCost = modelConfig 
+                            ? (stats.input / 1000000) * modelConfig.costInput + (stats.output / 1000000) * modelConfig.costOutput
                             : 0;
 
                          return (
@@ -389,10 +400,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                  <span className="font-semibold text-sm text-gray-800 dark:text-gray-200">{modelName}</span>
                                  <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">${mCost.toFixed(5)}</span>
                               </div>
-                              <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400">
+                              <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400 mb-2">
                                  <span>In: {stats.input.toLocaleString()}</span>
                                  <span>Out: {stats.output.toLocaleString()}</span>
                               </div>
+                              {modelConfig && (
+                                <div className="pt-2 border-t border-gray-200 dark:border-slate-600">
+                                   <div className="flex items-center justify-between text-[10px] text-gray-500 dark:text-gray-400">
+                                      <div className="flex items-center gap-3">
+                                         <span className="flex items-center gap-1">
+                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
+                                            </svg>
+                                            ${modelConfig.costInput.toFixed(2)}/1M
+                                         </span>
+                                         <span className="flex items-center gap-1">
+                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                                            </svg>
+                                            ${modelConfig.costOutput.toFixed(2)}/1M
+                                         </span>
+                                      </div>
+                                      <span className="font-mono">
+                                         ~${((modelConfig.costInput + modelConfig.costOutput) / 2).toFixed(2)}/1M avg
+                                      </span>
+                                   </div>
+                                </div>
+                              )}
                            </div>
                          );
                        })}
@@ -401,9 +435,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                )}
 
                <p className="text-[10px] text-gray-400 text-center">
-                  * Costs are estimated based on Gemini pricing. <br/>
-                  Flash: $0.075/1M In, $0.30/1M Out. <br/>
-                  Pro models estimated at higher rates.
+                  * Costs are estimated based on model pricing. <br/>
+                  Usage resets automatically on the last day of each month (month-to-date). <br/>
+                  Prices shown are per 1 million tokens.
                </p>
             </div>
           )}

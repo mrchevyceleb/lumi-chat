@@ -163,6 +163,7 @@ const App: React.FC = () => {
   });
 
   const [isLiveMode, setIsLiveMode] = useState(false);
+  const [liveRagContext, setLiveRagContext] = useState<string>("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isVaultOpen, setIsVaultOpen] = useState(false);
 
@@ -517,6 +518,26 @@ const App: React.FC = () => {
     }
   };
 
+  // Start live voice mode with RAG context
+  const startLiveMode = async () => {
+    // Fetch RAG context for the voice session
+    // Use a general query to get relevant context from past conversations
+    try {
+      const context = await ragService.getRagContext(
+        "voice conversation context", // General query
+        activeChatId || undefined,
+        activeChat?.messages.slice(-4).filter(m => m.role === 'user').map(m => m.content.slice(0, 100)).join('; ') || "",
+        activeChat?.messages.length || 0
+      );
+      setLiveRagContext(context);
+      console.log("[Voice] Fetched RAG context for live session:", context.slice(0, 100) + "...");
+    } catch (e) {
+      console.warn("[Voice] Failed to fetch RAG context:", e);
+      setLiveRagContext("");
+    }
+    setIsLiveMode(true);
+  };
+
   const handlePersonaChange = async (personaId: string) => {
      const selected = personas.find(p => p.id === personaId) || DEFAULT_PERSONA;
      setCurrentPersona(selected);
@@ -530,6 +551,7 @@ const App: React.FC = () => {
 
   // --- NEW: Handle Live Transcript ---
   const handleLiveTranscript = async (content: string, role: 'user' | 'model') => {
+    console.log(`[Voice] handleLiveTranscript called - Role: ${role}, Content: ${content.slice(0, 50)}...`);
     if (!content.trim()) return;
 
     let chatId = activeChatId;
@@ -583,9 +605,18 @@ const App: React.FC = () => {
     isAtBottomRef.current = true;
   };
 
-  // --- Handle Call End: Send all transcripts to chat ---
+  // --- Handle Call End: Send all transcripts to chat and save to RAG ---
   const handleCallEnd = async (transcripts: Array<{ text: string; role: 'user' | 'model' }>) => {
-    if (!transcripts || transcripts.length === 0) return;
+    if (!transcripts || transcripts.length === 0) {
+      console.log("[Voice] No transcripts to save");
+      return;
+    }
+
+    console.log("[Voice] Processing call end with", transcripts.length, "transcripts");
+    console.log("[Voice] Transcripts breakdown:");
+    transcripts.forEach((t, i) => {
+      console.log(`  [${i}] Role: ${t.role}, Text: ${t.text.slice(0, 60)}...`);
+    });
 
     let chatId = activeChatId;
     let currentChatList = [...chats];
@@ -610,6 +641,7 @@ const App: React.FC = () => {
        isNewChat = true;
        setIsSidebarOpen(false);
        await dbService.createChat(newChat);
+       console.log("[Voice] Created new chat for voice session:", chatId);
     }
 
     // Get current chat to check for existing messages
@@ -619,15 +651,20 @@ const App: React.FC = () => {
     // Create messages from transcripts
     const messagesToAdd: Message[] = transcripts
       .filter(t => t.text.trim())
-      .map(t => ({
+      .map((t, idx) => ({
         id: uuidv4(),
         role: t.role,
         content: t.text.trim(),
-        timestamp: Date.now(),
+        timestamp: Date.now() + idx, // Ensure unique timestamps for ordering
         type: 'text' as const
       }));
 
-    if (messagesToAdd.length === 0) return;
+    if (messagesToAdd.length === 0) {
+      console.log("[Voice] No valid messages to add");
+      return;
+    }
+
+    console.log("[Voice] Adding", messagesToAdd.length, "messages to chat");
 
     // Add all messages to the chat
     setChats(prev => prev.map(c => {
@@ -646,15 +683,54 @@ const App: React.FC = () => {
     }));
 
     // Save messages to database
+    const existingChat = currentChatList.find(c => c.id === chatId);
+    const existingContents = new Set(existingChat?.messages.map(m => m.content) || []);
+    
     for (const msg of messagesToAdd) {
-      const existingChat = chats.find(c => c.id === chatId);
-      if (existingChat) {
-        const existingContents = new Set(existingChat.messages.map(m => m.content));
-        if (!existingContents.has(msg.content)) {
-          await dbService.addMessage(chatId, msg);
-        }
-      } else {
+      if (!existingContents.has(msg.content)) {
         await dbService.addMessage(chatId, msg);
+      }
+    }
+
+    // --- Save voice conversation to RAG memory ---
+    // This allows the RAG system to reference past voice conversations
+    if (session?.user?.id) {
+      // Group transcripts into conversation pairs and save to RAG
+      const userMessages = transcripts.filter(t => t.role === 'user').map(t => t.text.trim()).filter(Boolean);
+      const modelMessages = transcripts.filter(t => t.role === 'model').map(t => t.text.trim()).filter(Boolean);
+      
+      // Save each user-model exchange to RAG for better retrieval
+      const maxPairs = Math.max(userMessages.length, modelMessages.length);
+      for (let i = 0; i < maxPairs; i++) {
+        const userMsg = userMessages[i] || '';
+        const modelMsg = modelMessages[i] || '';
+        
+        if (userMsg || modelMsg) {
+          // Fire and forget - don't await to avoid blocking
+          ragService.saveMemory(
+            session.user.id, 
+            chatId!, 
+            userMsg || "[Voice interaction]", 
+            modelMsg || "[Voice response]"
+          ).then(() => {
+            console.log("[Voice] Saved voice exchange to RAG memory");
+          }).catch(err => {
+            console.warn("[Voice] Failed to save to RAG:", err);
+          });
+        }
+      }
+    }
+
+    // Generate title if this is a new chat with voice content
+    if (isNewChat && messagesToAdd.length > 0) {
+      const firstUserMsg = messagesToAdd.find(m => m.role === 'user')?.content || '';
+      if (firstUserMsg) {
+        generateChatTitle(firstUserMsg).then(async (aiTitle) => {
+          if (!aiTitle) return;
+          const cleanTitle = aiTitle.replace(/^"|"$/g, '');
+          setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: cleanTitle } : c));
+          await dbService.updateChat(chatId!, { title: cleanTitle });
+        });
       }
     }
 
@@ -1057,6 +1133,7 @@ const App: React.FC = () => {
         onClose={() => setIsLiveMode(false)} 
         persona={currentPersona} 
         voiceName={voiceName}
+        ragContext={liveRagContext}
         onTranscript={handleLiveTranscript} // Pass the handler for incremental updates
         onCallEnd={handleCallEnd} // Pass the handler for sending all transcripts when call ends
       />
@@ -1112,7 +1189,7 @@ const App: React.FC = () => {
            </div>
            
            <div className="flex items-center gap-1 flex-shrink-0">
-             <button onClick={() => setIsLiveMode(true)} className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-gradient-to-r from-red-500 to-pink-500 text-white shadow-lg shadow-pink-500/20 hover:scale-105 active:scale-90 transition-transform" title="Start Live Voice Chat">
+             <button onClick={startLiveMode} className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-gradient-to-r from-red-500 to-pink-500 text-white shadow-lg shadow-pink-500/20 hover:scale-105 active:scale-90 transition-transform" title="Start Live Voice Chat">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" /></svg>
              </button>
            </div>

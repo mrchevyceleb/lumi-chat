@@ -534,6 +534,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                      )}
                    </div>
 
+                   {/* Model Indicator - Mobile only */}
+                   <div className="md:hidden flex items-center gap-1 bg-gray-100 dark:bg-slate-700/50 rounded-full px-2 py-1 border border-gray-200 dark:border-slate-600">
+                     <span className={selectedModel.includes('pro') ? 'text-indigo-500' : 'text-green-500'}>●</span>
+                     <span className="text-xs font-medium text-gray-600 dark:text-gray-300">{getModelName()}</span>
+                   </div>
+
                    {/* Model Selector - Hidden on mobile */}
                    <div className="relative hidden md:block" ref={modelMenuRef}>
                       <button 
