@@ -61,3 +61,5 @@ CREATE POLICY "Users can delete their own vault items"
 ON public.vault_items FOR DELETE 
 USING (auth.uid() = user_id);
 
+
+
