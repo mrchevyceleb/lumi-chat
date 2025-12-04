@@ -18,6 +18,8 @@ export interface ChatSession {
   messages: Message[];
   personaId: string;
   lastUpdated: number;
+  modelId?: ModelId; // Conversation-specific model selection
+  useSearch?: boolean; // Conversation-specific web search toggle
 }
 
 export interface Folder {
@@ -79,7 +81,7 @@ export const CODING_PERSONA: Persona = {
   color: 'bg-blue-500'
 };
 
-export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-flash-lite-latest';
+export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-flash-lite-latest' | 'gpt-5.1' | 'gpt-5-mini' | 'gpt-5-nano' | 'o1' | 'o1-mini';
 
 export interface ModelConfig {
   id: ModelId;
@@ -90,25 +92,63 @@ export interface ModelConfig {
 }
 
 export const AVAILABLE_MODELS: ModelConfig[] = [
+  // Budget Tier - Most affordable
   { 
-    id: 'gemini-2.5-flash', 
-    name: 'Gemini 2.5 Flash', 
-    description: 'Fast, efficient, low latency.', 
-    costInput: 0.075, 
-    costOutput: 0.30 
+    id: 'gpt-5-nano', 
+    name: 'GPT-5 Nano', 
+    description: 'Ultra-low cost, basic tasks.', 
+    costInput: 0.10, 
+    costOutput: 0.80 
   },
   {
     id: 'gemini-flash-lite-latest',
     name: 'Gemini 2.0 Flash-Lite',
-    description: 'Super fast & cost-effective.',
-    costInput: 0.075,
-    costOutput: 0.30
+    description: 'Super fast & lightweight.',
+    costInput: 0.10,
+    costOutput: 0.40
+  },
+  { 
+    id: 'gemini-2.5-flash', 
+    name: 'Gemini 2.5 Flash', 
+    description: 'Optimized speed & quality.', 
+    costInput: 0.15, 
+    costOutput: 3.50 
+  },
+  // Standard Tier - Balanced
+  { 
+    id: 'gpt-5-mini', 
+    name: 'GPT-5 Mini', 
+    description: 'Fast & cost-effective.', 
+    costInput: 0.25, 
+    costOutput: 2.00 
+  },
+  { 
+    id: 'o1-mini', 
+    name: 'o3-mini', 
+    description: 'Efficient reasoning model.', 
+    costInput: 1.10, 
+    costOutput: 4.40 
+  },
+  { 
+    id: 'gpt-5.1', 
+    name: 'GPT-5.1', 
+    description: 'Flagship coding & reasoning.', 
+    costInput: 1.25, 
+    costOutput: 10.00 
+  },
+  // Premium Tier - High capability
+  { 
+    id: 'o1', 
+    name: 'o3 (Reasoning)', 
+    description: 'STEM & code specialist.', 
+    costInput: 2.00, 
+    costOutput: 8.00 
   },
   { 
     id: 'gemini-3-pro-preview', 
     name: 'Gemini 3 Pro', 
-    description: 'High intelligence & reasoning.', 
-    costInput: 2.50, 
-    costOutput: 10.00 
+    description: 'Flagship preview model.', 
+    costInput: 2.00, 
+    costOutput: 12.00 
   }
 ];

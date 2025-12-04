@@ -1,18 +1,77 @@
-
 import React, { useEffect, useRef, useState } from 'react';
-import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { Persona } from '../types';
 import { AudioUtils } from '../services/audioUtils';
+
+// Types for the raw WebSocket protocol
+interface SetupMessage {
+  setup: {
+    model: string;
+    generationConfig?: {
+        responseModalities?: string[];
+        speechConfig?: {
+            voiceConfig?: {
+                prebuiltVoiceConfig?: {
+                    voiceName: string;
+                }
+            }
+        }
+    };
+    systemInstruction?: {
+        parts: { text: string }[];
+    };
+    // Enable transcription of audio
+    inputAudioTranscription?: Record<string, unknown>;
+    outputAudioTranscription?: Record<string, unknown>;
+    // Enable tools like Google Search
+    tools?: Array<{ googleSearch?: Record<string, unknown> }>;
+  }
+}
+
+interface ClientContentMessage {
+    realtimeInput: {
+        mediaChunks: {
+            mimeType: string;
+            data: string; // base64
+        }[];
+    }
+}
+
+interface ServerMessage {
+    serverContent?: {
+        modelTurn?: {
+            parts?: {
+                inlineData?: {
+                    mimeType: string;
+                    data: string;
+                };
+                text?: string; // Text transcription from model
+            }[];
+        };
+        turnComplete?: boolean;
+        interrupted?: boolean;
+    };
+    toolCall?: any; // Ignored for now
+    // Live API v1alpha/beta variations:
+    inputAudioTranscription?: { text: string }; // User's spoken input transcription
+    outputAudioTranscription?: { text: string }; // Model's output transcription (alternative location)
+}
+
+interface TranscriptEntry {
+  text: string;
+  role: 'user' | 'model';
+}
 
 interface LiveSessionOverlayProps {
   isOpen: boolean;
   onClose: () => void;
   persona: Persona;
   voiceName: string;
+  ragContext?: string; // RAG context to include in system instruction
   onTranscript?: (text: string, role: 'user' | 'model') => void;
+  onCallEnd?: (transcripts: TranscriptEntry[]) => void;
 }
 
-export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, onClose, persona, voiceName, onTranscript }) => {
+export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, onClose, persona, voiceName, ragContext, onTranscript, onCallEnd }) => {
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
   const [volume, setVolume] = useState(0); // 0 to 100 for visualizer
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -22,7 +81,7 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
 
   // Refs for audio context and session management to persist across renders
   const audioContextsRef = useRef<{ input?: AudioContext, output?: AudioContext }>({});
-  const sessionRef = useRef<Promise<any> | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   
   // Refs for audio nodes to prevent Garbage Collection (Fix for Desktop "Immediate Disconnect")
   const audioProcessingRef = useRef<{
@@ -44,9 +103,16 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
   const inputTranscriptBuffer = useRef<string>("");
   const outputTranscriptBuffer = useRef<string>("");
   
+  // Track all transcripts during the call
+  const allTranscriptsRef = useRef<TranscriptEntry[]>([]);
+  
   // Keep onTranscript prop up-to-date in refs to avoid stale closures in Live API callbacks
   const onTranscriptRef = useRef(onTranscript);
   useEffect(() => { onTranscriptRef.current = onTranscript; }, [onTranscript]);
+  
+  // Keep onCallEnd prop up-to-date in refs
+  const onCallEndRef = useRef(onCallEnd);
+  useEffect(() => { onCallEndRef.current = onCallEnd; }, [onCallEnd]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -90,6 +156,46 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
   }, [isOpen, status]);
 
   const cleanup = () => {
+    // Only send transcripts if we had an active session
+    const hadActiveSession = currentSessionIdRef.current !== "";
+    
+    console.log("[Live] Cleanup called, hadActiveSession:", hadActiveSession);
+    console.log("[Live] Current transcripts count:", allTranscriptsRef.current.length);
+    console.log("[Live] Input buffer:", inputTranscriptBuffer.current.slice(0, 100));
+    console.log("[Live] Output buffer:", outputTranscriptBuffer.current.slice(0, 100));
+    
+    if (hadActiveSession) {
+      // Helper to normalize text: trim and collapse multiple spaces
+      const normalizeText = (str: string) => str.trim().replace(/\s+/g, ' ');
+      
+      // Send any remaining buffered transcripts before cleanup
+      const remainingTranscripts: TranscriptEntry[] = [];
+      if (inputTranscriptBuffer.current.trim()) {
+        remainingTranscripts.push({ text: normalizeText(inputTranscriptBuffer.current), role: 'user' });
+        console.log("[Live] Adding remaining user transcript");
+      }
+      if (outputTranscriptBuffer.current.trim()) {
+        remainingTranscripts.push({ text: normalizeText(outputTranscriptBuffer.current), role: 'model' });
+        console.log("[Live] Adding remaining model transcript");
+      }
+      
+      // Combine all transcripts and send them when call ends
+      const allTranscripts = [...allTranscriptsRef.current, ...remainingTranscripts];
+      console.log("[Live] Total transcripts to send:", allTranscripts.length);
+      
+      if (allTranscripts.length > 0 && onCallEndRef.current) {
+        console.log("[Live] Calling onCallEnd with transcripts:", allTranscripts.map(t => `[${t.role}]: ${t.text.slice(0, 50)}...`));
+        onCallEndRef.current(allTranscripts);
+      } else {
+        console.log("[Live] No transcripts to send or no callback");
+      }
+    }
+    
+    // Clear transcripts for next session
+    allTranscriptsRef.current = [];
+    inputTranscriptBuffer.current = "";
+    outputTranscriptBuffer.current = "";
+
     // Invalidate current session ID
     currentSessionIdRef.current = "";
 
@@ -112,12 +218,10 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
     try { audioContextsRef.current.output?.close(); } catch(e) {}
     audioContextsRef.current = {};
 
-    // Close session
-    if (sessionRef.current) {
-      sessionRef.current.then(session => {
-         try { session.close(); } catch (e) { console.warn("Error closing session (likely already closed)", e); }
-      }).catch(() => {}); // Ignore errors if session connect failed
-      sessionRef.current = null;
+    // Close WebSocket
+    if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
     }
   };
 
@@ -129,15 +233,11 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
     // Clear transcription buffers
     inputTranscriptBuffer.current = "";
     outputTranscriptBuffer.current = "";
+    allTranscriptsRef.current = [];
     
     setStatus('connecting');
 
     try {
-      const apiKey = process.env.API_KEY;
-      if (!apiKey) throw new Error("No API Key found. Please set your API Key.");
-
-      const ai = new GoogleGenAI({ apiKey });
-      
       // 1. Setup Audio Contexts
       // Input: 16kHz for Gemini
       const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -158,176 +258,293 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
       // 2. Get User Media
       let stream: MediaStream;
       try {
+        // Check if we're in a secure context (HTTPS or localhost)
+        if (!window.isSecureContext) {
+          throw new Error("INSECURE_CONTEXT");
+        }
+        
+        // Check if getUserMedia is available
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error("NO_MEDIA_DEVICES");
+        }
+        
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         audioProcessingRef.current.stream = stream;
-      } catch (err) {
+      } catch (err: any) {
+        console.error("Microphone error:", err);
+        
+        if (err.message === "INSECURE_CONTEXT") {
+          throw new Error("Voice chat requires a secure connection. Please use localhost:5173 or HTTPS.");
+        }
+        if (err.message === "NO_MEDIA_DEVICES") {
+          throw new Error("Your browser doesn't support microphone access.");
+        }
+        if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+          throw new Error("Microphone access denied. Please allow microphone permissions in your browser settings.");
+        }
+        if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+          throw new Error("No microphone found. Please connect a microphone and try again.");
+        }
         throw new Error("Microphone access denied. Please allow microphone permissions.");
       }
       
-      // 3. Connect to Gemini Live
-      // Note: Using the model specified in guidelines. If this fails consistently, it might be due to API tier restrictions.
-      const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-        callbacks: {
-          onopen: () => {
-            // Check if this callback belongs to the active session
-            if (currentSessionIdRef.current !== sessionId) return;
-            
-            if (mountedRef.current) setStatus('connected');
-            
-            // Setup Input Stream (Mic -> ScriptProcessor -> Model)
-            const source = inputCtx.createMediaStreamSource(stream);
-            const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
-            
-            // Store nodes to prevent Garbage Collection
-            audioProcessingRef.current.source = source;
-            audioProcessingRef.current.processor = scriptProcessor;
+      // 3. Connect to Gemini Live Relay (Edge Function)
+      // Construct URL for Supabase Edge Function
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://mwwoahlygzvietmhklvy.supabase.co';
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+      
+      // Replace https with wss and include apikey (needed for Supabase Auth/Gateway)
+      const wsUrl = `${supabaseUrl.replace('http', 'ws')}/functions/v1/gemini-live-relay?model=gemini-2.0-flash-exp&apikey=${anonKey}`;
+      
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-            scriptProcessor.onaudioprocess = (e) => {
-              // Strict checks to prevent sending data to closed sessions
-              if (currentSessionIdRef.current !== sessionId) {
-                 // Disconnect on next tick to avoid errors
-                 return;
-              }
-              if (!sessionRef.current) return;
-              
-              const inputData = e.inputBuffer.getChannelData(0);
-              const pcmBlob = AudioUtils.createBlob(inputData);
-              
-              sessionRef.current.then(session => {
-                 try {
-                    session.sendRealtimeInput({ media: pcmBlob });
-                 } catch (err) {
-                    // Ignore send errors, likely session closing
-                 }
-              }).catch(() => {
-                 // Ignore promise errors if session setup failed
-              });
+      ws.onopen = () => {
+        if (currentSessionIdRef.current !== sessionId) return;
+        if (mountedRef.current) setStatus('connected');
+
+        // Send Setup Message with transcription and Google Search enabled
+        const setupMsg: SetupMessage = {
+            setup: {
+                model: "models/gemini-2.0-flash-exp",
+                generationConfig: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: {
+                                voiceName: voiceName
+                            }
+                        }
+                    }
+                },
+                systemInstruction: {
+                    parts: [{ 
+                      text: `You are acting as the persona: ${persona.name}. ${persona.systemInstruction}. Keep your responses relatively concise and conversational as this is a voice chat. You have access to Google Search to look up current information when needed.${ragContext ? `\n\n## Relevant Memory/Context from Past Conversations:\n${ragContext}` : ''}`
+                    }]
+                },
+                // Enable transcription for both input (user) and output (model) audio
+                inputAudioTranscription: {},
+                outputAudioTranscription: {},
+                // Enable Google Search for real-time information
+                tools: [{ googleSearch: {} }]
+            }
+        };
+        ws.send(JSON.stringify(setupMsg));
+
+        // Setup Audio Input Stream
+        const source = inputCtx.createMediaStreamSource(stream);
+        const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
+        
+        audioProcessingRef.current.source = source;
+        audioProcessingRef.current.processor = scriptProcessor;
+
+        scriptProcessor.onaudioprocess = (e) => {
+            if (currentSessionIdRef.current !== sessionId || ws.readyState !== WebSocket.OPEN) return;
+            
+            const inputData = e.inputBuffer.getChannelData(0);
+            const base64 = AudioUtils.createBlob(inputData).data;
+
+            const msg: ClientContentMessage = {
+                realtimeInput: {
+                    mediaChunks: [{
+                        mimeType: "audio/pcm;rate=16000",
+                        data: base64
+                    }]
+                }
             };
+            ws.send(JSON.stringify(msg));
+        };
 
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(inputCtx.destination);
-          },
-          onmessage: async (message: LiveServerMessage) => {
-             // Check stale
-            if (currentSessionIdRef.current !== sessionId) return;
+        source.connect(scriptProcessor);
+        scriptProcessor.connect(inputCtx.destination);
+      };
 
+      ws.onmessage = async (event) => {
+        if (currentSessionIdRef.current !== sessionId) return;
+        
+        try {
+            let message: ServerMessage;
+            if (event.data instanceof Blob) {
+                 // Handle blob if necessary, but Gemini sends JSON text frames mostly
+                 const text = await event.data.text();
+                 message = JSON.parse(text);
+            } else {
+                 message = JSON.parse(event.data);
+            }
+
+            // --- Audio Handling ---
+            const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+            if (base64Audio) {
+                // Reset/Sync time if needed
+                nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
+
+                const audioBuffer = await AudioUtils.decodeAudioData(
+                  AudioUtils.decode(base64Audio),
+                  outputCtx,
+                  24000,
+                  1
+                );
+
+                const source = outputCtx.createBufferSource();
+                source.buffer = audioBuffer;
+                
+                // Connect to visualizer and output
+                source.connect(analyser);
+                analyser.connect(outputCtx.destination);
+
+                source.addEventListener('ended', () => {
+                  audioSourcesRef.current.delete(source);
+                });
+
+                source.start(nextStartTimeRef.current);
+                nextStartTimeRef.current += audioBuffer.duration;
+                audioSourcesRef.current.add(source);
+            }
+            
+            // --- Transcription Handling (wrapped in try-catch to not break audio) ---
             try {
-                // --- Audio Handling ---
-                const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-                if (base64Audio) {
-                  // Reset/Sync time if needed
-                  nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
-
-                  const audioBuffer = await AudioUtils.decodeAudioData(
-                    AudioUtils.decode(base64Audio),
-                    outputCtx,
-                    24000,
-                    1
-                  );
-
-                  const source = outputCtx.createBufferSource();
-                  source.buffer = audioBuffer;
-                  
-                  // Connect to visualizer and output
-                  source.connect(analyser);
-                  analyser.connect(outputCtx.destination);
-
-                  source.addEventListener('ended', () => {
-                    audioSourcesRef.current.delete(source);
-                  });
-
-                  source.start(nextStartTimeRef.current);
-                  nextStartTimeRef.current += audioBuffer.duration;
-                  audioSourcesRef.current.add(source);
+                // Log raw message for debugging
+                const msgStr = JSON.stringify(message);
+                console.log("[Live] Message received:", msgStr.slice(0, 1000));
+                
+                // === Handle transcription formats from Gemini Live API ===
+                // PRIORITY: Use dedicated transcription fields ONLY to avoid mixing roles
+                
+                let gotUserTranscription = false;
+                let gotModelTranscription = false;
+                
+                // Format 1: Direct inputAudioTranscription (user speech) - HIGHEST PRIORITY
+                if (message.inputAudioTranscription?.text) {
+                    const text = message.inputAudioTranscription.text;
+                    console.log("[Live] ✓✓ USER INPUT transcription:", text);
+                    // Don't add extra spaces - the API provides properly formatted text
+                    inputTranscriptBuffer.current += text;
+                    gotUserTranscription = true;
                 }
                 
-                // --- Transcription Handling ---
-                
-                // Accumulate Input (User) Transcription
-                if (message.serverContent?.inputTranscription?.text) {
-                   const text = message.serverContent.inputTranscription.text;
-                   inputTranscriptBuffer.current += text;
-                   // Show user text briefly if desired, or wait for model response to show context
+                // Format 2: Direct outputAudioTranscription (model speech) - HIGHEST PRIORITY
+                if ((message as any).outputAudioTranscription?.text) {
+                    const text = (message as any).outputAudioTranscription.text;
+                    console.log("[Live] ✓✓ MODEL OUTPUT transcription:", text);
+                    // Don't add extra spaces - the API provides properly formatted text
+                    outputTranscriptBuffer.current += text;
+                    gotModelTranscription = true;
                 }
                 
-                // Accumulate Output (Model) Transcription
-                if (message.serverContent?.outputTranscription?.text) {
-                   const text = message.serverContent.outputTranscription.text;
-                   outputTranscriptBuffer.current += text;
-                   setCurrentSubtitle(outputTranscriptBuffer.current); // Show subtitle
+                // Format 3: serverContent.inputTranscription (user speech alternative)
+                if ((message.serverContent as any)?.inputTranscription?.text) {
+                    const text = (message.serverContent as any).inputTranscription.text;
+                    console.log("[Live] ✓✓ SERVER INPUT transcription:", text);
+                    inputTranscriptBuffer.current += text;
+                    gotUserTranscription = true;
                 }
+                
+                // Format 4: serverContent.outputTranscription (model speech alternative)
+                if ((message.serverContent as any)?.outputTranscription?.text) {
+                    const text = (message.serverContent as any).outputTranscription.text;
+                    console.log("[Live] ✓✓ SERVER OUTPUT transcription:", text);
+                    outputTranscriptBuffer.current += text;
+                    gotModelTranscription = true;
+                }
+                
+                // Format 5: Text in serverContent.modelTurn.parts - ONLY use for MODEL output
+                // (and only if we didn't already get outputAudioTranscription)
+                if (!gotModelTranscription) {
+                    const parts = message.serverContent?.modelTurn?.parts;
+                    if (parts && Array.isArray(parts)) {
+                        for (const part of parts) {
+                            if ((part as any).text && !(part as any).inlineData) {
+                                const text = (part as any).text;
+                                console.log("[Live] ✓ Model text part (fallback):", text.slice(0, 100));
+                                outputTranscriptBuffer.current += text;
+                            }
+                        }
+                    }
+                }
+                
+                // Format 6: userContent transcription (user's speech in response)
+                if (!gotUserTranscription && (message as any).userContent?.parts) {
+                    const userParts = (message as any).userContent.parts;
+                    for (const part of userParts) {
+                        if (part.text) {
+                            console.log("[Live] ✓ User content text:", part.text);
+                            inputTranscriptBuffer.current += part.text;
+                        }
+                    }
+                }
+                
+                // Update real-time subtitle with ACCUMULATED text (not just the last chunk)
+                // Show the last ~100 characters of the current buffer for readability
+                if (gotUserTranscription && inputTranscriptBuffer.current.trim()) {
+                    const fullText = inputTranscriptBuffer.current.trim();
+                    // Show last portion if too long
+                    const displayText = fullText.length > 100 ? "..." + fullText.slice(-100) : fullText;
+                    setCurrentSubtitle(`You: ${displayText}`);
+                } else if ((gotModelTranscription || outputTranscriptBuffer.current.trim()) && outputTranscriptBuffer.current.trim()) {
+                    const fullText = outputTranscriptBuffer.current.trim();
+                    // Show last portion if too long
+                    const displayText = fullText.length > 150 ? "..." + fullText.slice(-150) : fullText;
+                    setCurrentSubtitle(displayText);
+                }
+                
+            } catch (transcriptErr) {
+                console.warn("Transcription extraction error (non-fatal):", transcriptErr);
+            }
+            
+            // Handle Turn Completion
+            if (message.serverContent?.turnComplete) {
+                console.log("[Live] ✓ Turn complete received!");
+                console.log("[Live] Input buffer at turn end:", inputTranscriptBuffer.current.slice(0, 100));
+                console.log("[Live] Output buffer at turn end:", outputTranscriptBuffer.current.slice(0, 100));
+                
+                // Helper to normalize text: trim and collapse multiple spaces
+                const normalizeText = (str: string) => str.trim().replace(/\s+/g, ' ');
+                
+                // IMPORTANT: Flush user transcript FIRST, then model transcript
+                // This preserves the conversation order
+                if (inputTranscriptBuffer.current.trim()) {
+                     const text = normalizeText(inputTranscriptBuffer.current);
+                     console.log("[Live] Saving USER transcript:", text.slice(0, 50));
+                     onTranscriptRef.current?.(text, 'user');
+                     allTranscriptsRef.current.push({ text, role: 'user' });
+                     inputTranscriptBuffer.current = "";
+                }
+                if (outputTranscriptBuffer.current.trim()) {
+                     const text = normalizeText(outputTranscriptBuffer.current);
+                     console.log("[Live] Saving MODEL transcript:", text.slice(0, 50));
+                     onTranscriptRef.current?.(text, 'model');
+                     allTranscriptsRef.current.push({ text, role: 'model' });
+                     outputTranscriptBuffer.current = "";
+                }
+                
+                console.log("[Live] Total transcripts so far:", allTranscriptsRef.current.length);
+            }
 
-                // Handle Turn Completion (Save to Chat History)
-                if (message.serverContent?.turnComplete) {
-                   // Flush User Input
-                   if (inputTranscriptBuffer.current.trim()) {
-                      onTranscriptRef.current?.(inputTranscriptBuffer.current, 'user');
-                      inputTranscriptBuffer.current = "";
-                   }
-                   
-                   // Flush Model Output
-                   if (outputTranscriptBuffer.current.trim()) {
-                      onTranscriptRef.current?.(outputTranscriptBuffer.current, 'model');
-                      outputTranscriptBuffer.current = "";
-                   }
-                }
+            if (message.serverContent?.interrupted) {
+                audioSourcesRef.current.forEach(src => src.stop());
+                audioSourcesRef.current.clear();
+                nextStartTimeRef.current = outputCtx.currentTime;
+                setCurrentSubtitle(""); 
+            }
 
-                // Handle Interruption
-                if (message.serverContent?.interrupted) {
-                  audioSourcesRef.current.forEach(src => src.stop());
-                  audioSourcesRef.current.clear();
-                  nextStartTimeRef.current = outputCtx.currentTime;
-                  
-                  // If interrupted, flush whatever we have so far?
-                  // Usually interruption means user spoke over model.
-                  // We might want to save the partial model response.
-                  if (outputTranscriptBuffer.current.trim()) {
-                      onTranscriptRef.current?.(outputTranscriptBuffer.current + " [Interrupted]", 'model');
-                      outputTranscriptBuffer.current = "";
-                  }
-                  setCurrentSubtitle(""); 
-                }
-            } catch (err) {
-                console.error("Audio processing error", err);
-            }
-          },
-          onclose: (event) => {
-            console.log("Session closed", event);
-            // Only update status if this is the active session
-            if (currentSessionIdRef.current === sessionId && mountedRef.current) {
-                setStatus('disconnected');
-            }
-          },
-          onerror: (err) => {
-            console.error("Live Error:", err);
-            if (currentSessionIdRef.current === sessionId && mountedRef.current) {
-                setStatus('error');
-                setErrorMessage(err.message || "Connection failed");
-            }
-          }
-        },
-        config: {
-          responseModalities: [Modality.AUDIO],
-          inputAudioTranscription: { model: 'gemini-2.5-flash-native-audio-preview-09-2025' },
-          outputAudioTranscription: { model: 'gemini-2.5-flash-native-audio-preview-09-2025' },
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } }
-          },
-          systemInstruction: `You are acting as the persona: ${persona.name}. ${persona.systemInstruction}. Keep your responses relatively concise and conversational as this is a voice chat.`,
+        } catch (err) {
+            console.error("Message processing error", err);
         }
-      });
-      
-      sessionRef.current = sessionPromise;
-      
-      // Catch initial connection failures
-      sessionPromise.catch(err => {
-         console.error("Session connection failed:", err);
+      };
+
+      ws.onclose = () => {
+         if (currentSessionIdRef.current === sessionId && mountedRef.current) {
+            setStatus('disconnected');
+         }
+      };
+
+      ws.onerror = (err) => {
+         console.error("WebSocket Error:", err);
          if (currentSessionIdRef.current === sessionId && mountedRef.current) {
             setStatus('error');
-            setErrorMessage("Could not connect to model. Please check API Key/Access.");
+            setErrorMessage("Connection failed");
          }
-      });
+      };
 
     } catch (e: any) {
       if (currentSessionIdRef.current === sessionId) {
@@ -434,3 +651,4 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
     </div>
   );
 };
+

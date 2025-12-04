@@ -1,5 +1,6 @@
 
-const CACHE_NAME = 'lumi-chat-v4';
+// Increment cache version when deploying updates
+const CACHE_NAME = 'lumi-chat-v6';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -27,6 +28,7 @@ self.addEventListener('activate', (event) => {
         return Promise.all(
           cacheNames.map((cacheName) => {
             if (cacheName !== CACHE_NAME) {
+              console.log('Deleting old cache:', cacheName);
               return caches.delete(cacheName);
             }
           })
@@ -36,33 +38,90 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Listen for messages from the app (e.g., to clear cache on auth errors)
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'CLEAR_CACHE') {
+    console.log('Received CLEAR_CACHE message, clearing all caches...');
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cacheName) => caches.delete(cacheName))
+      );
+    }).then(() => {
+      console.log('All caches cleared');
+      // Notify the client
+      if (event.source) {
+        event.source.postMessage({ type: 'CACHE_CLEARED' });
+      }
+    });
+  }
+  
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // CRITICAL FIX: Bypass Service Worker for API calls.
-  // Intercepting these can cause CORS/Offline errors in some environments.
-  if (
+  // CRITICAL FIX: Explicitly pass through API calls to the network.
+  // Using return; without respondWith() can cause failures on mobile browsers and PWAs.
+  // We must explicitly call respondWith(fetch()) for these requests.
+  const isApiCall = (
     url.hostname.includes('supabase.co') || 
     url.hostname.includes('googleapis.com') || 
     url.hostname.includes('goog') ||
-    url.pathname.includes('/rest/v1/') // Specific Supabase REST path check
-  ) {
-    return; // Fallback to network directly (bypass SW)
+    url.pathname.includes('/rest/v1/') ||
+    url.pathname.includes('/functions/v1/') || // Edge Functions
+    url.pathname.includes('/auth/v1/') || // Auth endpoints
+    url.pathname.includes('/storage/v1/') || // Storage endpoints
+    url.pathname.includes('/realtime/') // Realtime/websocket
+  );
+
+  if (isApiCall) {
+    // Explicitly pass through to network - this works correctly on all browsers
+    event.respondWith(
+      fetch(event.request).then(response => {
+        // If we get a 401 or 403, the auth token is invalid
+        // Notify all clients so they can handle re-authentication
+        if (response.status === 401 || response.status === 403) {
+          console.warn('Auth error detected (', response.status, '), notifying clients...');
+          self.clients.matchAll().then(clients => {
+            clients.forEach(client => {
+              client.postMessage({ 
+                type: 'AUTH_ERROR', 
+                status: response.status,
+                url: event.request.url 
+              });
+            });
+          });
+        }
+        return response;
+      }).catch(err => {
+        console.error('API fetch failed:', err);
+        return new Response(JSON.stringify({ error: 'Network request failed' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      })
+    );
+    return;
   }
 
-  // STRATEGY: Stale-While-Revalidate for HTML (Navigation)
+  // STRATEGY: Network-First for HTML (Navigation) - ensures fresh content
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      caches.match('./index.html').then((cachedResponse) => {
-        const fetchPromise = fetch(event.request).then((networkResponse) => {
+      fetch(event.request)
+        .then((networkResponse) => {
+          // Cache the fresh response
           return caches.open(CACHE_NAME).then((cache) => {
             cache.put('./index.html', networkResponse.clone());
             return networkResponse;
           });
-        });
-        // Return cached response immediately if available, otherwise wait for network
-        return cachedResponse || fetchPromise;
-      })
+        })
+        .catch(() => {
+          // Only fall back to cache if network fails
+          return caches.match('./index.html');
+        })
     );
     return;
   }
@@ -70,7 +129,12 @@ self.addEventListener('fetch', (event) => {
   // STRATEGY: Cache-First for Assets (Images, Fonts, Scripts)
   event.respondWith(
     caches.match(event.request).then((response) => {
-      return response || fetch(event.request);
+      return response || fetch(event.request).catch(() => {
+        // Return a fallback for images if offline
+        if (event.request.destination === 'image') {
+          return new Response('', { status: 404 });
+        }
+      });
     })
   );
 });

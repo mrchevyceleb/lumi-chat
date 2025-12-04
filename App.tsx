@@ -6,15 +6,16 @@ import { Sidebar } from './components/Sidebar';
 import { MessageBubble } from './components/MessageBubble';
 import { ChatInput } from './components/ChatInput'; // New Import
 import { streamChatResponse, generateChatTitle, InvalidApiKeyError } from './services/geminiService';
-import { ChatSession, Folder, Message, Persona, DEFAULT_PERSONA, CODING_PERSONA, ModelId } from './types';
+import { ChatSession, Folder, Message, Persona, DEFAULT_PERSONA, CODING_PERSONA, ModelId, AVAILABLE_MODELS } from './types';
 import { LiveSessionOverlay } from './components/LiveSessionOverlay';
-import { supabase } from './services/supabaseClient';
+import { supabase, attemptSessionRecovery, isAuthError } from './services/supabaseClient';
 import { dbService, UsageStats } from './services/dbService';
 import { ragService } from './services/ragService'; // Import RAG Service
 import { AuthOverlay } from './components/AuthOverlay';
 import { SettingsModal } from './components/SettingsModal';
 import { VaultCapture } from './components/VaultCapture';
 import { VaultModal } from './components/VaultModal';
+import { ContextMenu } from './components/ContextMenu';
 
 // Mock data initialization
 const INITIAL_PERSONAS = [DEFAULT_PERSONA, CODING_PERSONA];
@@ -46,6 +47,12 @@ const App: React.FC = () => {
   });
 
   const [openTabs, setOpenTabs] = useState<string[]>([]); // New: Track open tabs
+  const [tabContextMenu, setTabContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    chatId: string;
+  } | null>(null);
 
   // Default sidebar closed on mobile for cleaner UX
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
@@ -64,6 +71,12 @@ const App: React.FC = () => {
     return localStorage.getItem('lumi_voice_name') || 'Kore';
   });
 
+  // Default Model State (Settings)
+  const [defaultModel, setDefaultModel] = useState<ModelId>(() => {
+    const saved = localStorage.getItem('lumi_default_model');
+    return (saved && AVAILABLE_MODELS.some(m => m.id === saved)) ? saved as ModelId : AVAILABLE_MODELS[0].id;
+  });
+
   // Token Usage State
   const [usageStats, setUsageStats] = useState<UsageStats>({ 
     inputTokens: 0, 
@@ -74,6 +87,10 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('lumi_voice_name', voiceName);
   }, [voiceName]);
+
+  useEffect(() => {
+    localStorage.setItem('lumi_default_model', defaultModel);
+  }, [defaultModel]);
 
   // Persist Active Chat ID
   useEffect(() => {
@@ -146,6 +163,7 @@ const App: React.FC = () => {
   });
 
   const [isLiveMode, setIsLiveMode] = useState(false);
+  const [liveRagContext, setLiveRagContext] = useState<string>("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isVaultOpen, setIsVaultOpen] = useState(false);
 
@@ -161,35 +179,102 @@ const App: React.FC = () => {
   useEffect(() => {
     const checkUser = async () => {
       setIsAuthChecking(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      setSession(session);
-      setIsAuthChecking(false);
       
-      if (session) {
-        loadUserData();
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        // If there's a session error or the session is invalid, try to recover
+        if (error || !session) {
+          console.log('No valid session found, checking for recoverable session...');
+          const recovered = await attemptSessionRecovery();
+          if (recovered) {
+            const { data: { session: newSession } } = await supabase.auth.getSession();
+            setSession(newSession);
+            if (newSession) {
+              loadUserData();
+            }
+          } else {
+            setSession(null);
+          }
+        } else {
+          setSession(session);
+          loadUserData();
+        }
+      } catch (e) {
+        console.error('Auth check failed:', e);
+        setSession(null);
       }
+      
+      setIsAuthChecking(false);
     };
     checkUser();
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'TOKEN_REFRESHED') return;
-
-      setSession(session);
-      if (session) {
-        loadUserData();
-      } else {
-        // Clear state on logout
+      console.log('Auth state changed:', event);
+      
+      if (event === 'TOKEN_REFRESHED') {
+        console.log('Token refreshed successfully');
+        return;
+      }
+      
+      if (event === 'SIGNED_OUT') {
+        // Clear all state on logout
         setChats([]);
         setFolders([]);
         setPersonas(INITIAL_PERSONAS);
         setActiveChatId(null);
         setOpenTabs([]);
         setUsageStats({ inputTokens: 0, outputTokens: 0, modelBreakdown: {} });
+        // Clear caches
+        localStorage.removeItem('lumi_chats_cache');
+        localStorage.removeItem('lumi_folders_cache');
+        localStorage.removeItem('lumi_active_chat');
+      }
+
+      setSession(session);
+      if (session) {
+        loadUserData();
       }
     });
 
-    return () => subscription.unsubscribe();
+    // Periodic session validation (every 5 minutes) - critical for PWAs
+    const sessionCheckInterval = setInterval(async () => {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (!currentSession && session) {
+        // Session expired, try to recover
+        console.log('Session expired during use, attempting recovery...');
+        const recovered = await attemptSessionRecovery();
+        if (!recovered) {
+          setSession(null);
+        }
+      }
+    }, 5 * 60 * 1000); // Every 5 minutes
+
+    // Listen for auth error messages from the service worker
+    const handleServiceWorkerMessage = async (event: MessageEvent) => {
+      if (event.data && event.data.type === 'AUTH_ERROR') {
+        console.warn('Service worker detected auth error:', event.data);
+        // Try to recover the session
+        const recovered = await attemptSessionRecovery();
+        if (!recovered) {
+          // Force re-login
+          setSession(null);
+        }
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+    }
+
+    return () => {
+      subscription.unsubscribe();
+      clearInterval(sessionCheckInterval);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+      }
+    };
   }, []);
 
 
@@ -221,8 +306,21 @@ const App: React.FC = () => {
         setPersonas(allPersonas);
         setChats(fetchedChats);
         setUsageStats(fetchedUsage);
-    } catch (error) {
+    } catch (error: any) {
         console.error("Failed to load data", error);
+        
+        // If it's an auth error (401/403), the session is invalid
+        if (isAuthError(error)) {
+          console.warn('Auth error during data load, attempting recovery...');
+          const recovered = await attemptSessionRecovery();
+          if (!recovered) {
+            // Force re-login
+            setSession(null);
+          } else {
+            // Retry loading data after recovery
+            loadUserData();
+          }
+        }
     } finally {
         setIsLoadingData(false);
     }
@@ -231,9 +329,17 @@ const App: React.FC = () => {
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setIsSettingsOpen(false);
-    // Clear cache
+    
+    // Clear localStorage caches
     localStorage.removeItem('lumi_chats_cache');
     localStorage.removeItem('lumi_folders_cache');
+    localStorage.removeItem('lumi_active_chat');
+    localStorage.removeItem('lumi-auth-token');
+    
+    // Tell service worker to clear its caches for a clean slate
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_CACHE' });
+    }
   };
 
   useEffect(() => {
@@ -305,13 +411,30 @@ const App: React.FC = () => {
 
   const getActiveChat = () => chats.find(c => c.id === activeChatId);
 
+  // Handler to save conversation-specific settings
+  const handleSaveChatSettings = async (modelId: ModelId, useSearch: boolean) => {
+    if (!activeChatId) return;
+    
+    // Update local state immediately for responsive UI
+    setChats(prev => prev.map(c => 
+      c.id === activeChatId 
+        ? { ...c, modelId, useSearch }
+        : c
+    ));
+    
+    // Save to database
+    await dbService.updateChat(activeChatId, { modelId, useSearch });
+  };
+
   // --- Actions ---
 
   const createNewChat = async (personaOverride?: Persona, folderId?: string) => {
-    let personaToUse = currentPersona;
+    let personaToUse = DEFAULT_PERSONA;
     if (personaOverride) {
       personaToUse = personaOverride;
       setCurrentPersona(personaOverride);
+    } else {
+      setCurrentPersona(DEFAULT_PERSONA);
     }
     const newChat: ChatSession = {
       id: uuidv4(),
@@ -324,7 +447,7 @@ const App: React.FC = () => {
     };
     setChats([newChat, ...chats]);
     setActiveChatId(newChat.id);
-    if (window.innerWidth < 768) setIsSidebarOpen(false);
+    setIsSidebarOpen(false); // Close sidebar when creating new chat
     await dbService.createChat(newChat);
   };
 
@@ -342,12 +465,77 @@ const App: React.FC = () => {
     setActiveChatId(chatId);
   };
 
+  const handleSelectChat = (chatId: string) => {
+    setActiveChatId(chatId);
+    setIsSidebarOpen(false); // Close sidebar when selecting a chat
+  };
+
+  const handleTabContextMenu = (e: React.MouseEvent, chatId: string) => {
+    e.preventDefault();
+    setTabContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      chatId
+    });
+  };
+
+  const handleCloseOthers = () => {
+    if (!tabContextMenu) return;
+    const { chatId } = tabContextMenu;
+    setOpenTabs([chatId]);
+    if (activeChatId !== chatId) setActiveChatId(chatId);
+    setTabContextMenu(null);
+  };
+
+  const handleCloseToRight = () => {
+    if (!tabContextMenu) return;
+    const { chatId } = tabContextMenu;
+    const index = openTabs.indexOf(chatId);
+    if (index === -1) return;
+    
+    const newTabs = openTabs.slice(0, index + 1);
+    setOpenTabs(newTabs);
+    
+    // If active chat was closed (meaning it was to the right), switch to the current tab
+    if (activeChatId && !newTabs.includes(activeChatId)) {
+      setActiveChatId(chatId);
+    }
+    setTabContextMenu(null);
+  };
+
+  const handleCloseAll = () => {
+    setOpenTabs([]);
+    setActiveChatId(null);
+    setTabContextMenu(null);
+  };
+
   const handleStopGeneration = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
       setIsTyping(false);
     }
+  };
+
+  // Start live voice mode with RAG context
+  const startLiveMode = async () => {
+    // Fetch RAG context for the voice session
+    // Use a general query to get relevant context from past conversations
+    try {
+      const context = await ragService.getRagContext(
+        "voice conversation context", // General query
+        activeChatId || undefined,
+        activeChat?.messages.slice(-4).filter(m => m.role === 'user').map(m => m.content.slice(0, 100)).join('; ') || "",
+        activeChat?.messages.length || 0
+      );
+      setLiveRagContext(context);
+      console.log("[Voice] Fetched RAG context for live session:", context.slice(0, 100) + "...");
+    } catch (e) {
+      console.warn("[Voice] Failed to fetch RAG context:", e);
+      setLiveRagContext("");
+    }
+    setIsLiveMode(true);
   };
 
   const handlePersonaChange = async (personaId: string) => {
@@ -363,6 +551,7 @@ const App: React.FC = () => {
 
   // --- NEW: Handle Live Transcript ---
   const handleLiveTranscript = async (content: string, role: 'user' | 'model') => {
+    console.log(`[Voice] handleLiveTranscript called - Role: ${role}, Content: ${content.slice(0, 50)}...`);
     if (!content.trim()) return;
 
     let chatId = activeChatId;
@@ -385,6 +574,7 @@ const App: React.FC = () => {
        setChats(currentChatList);
        setActiveChatId(chatId);
        isNewChat = true;
+       setIsSidebarOpen(false); // Close sidebar when starting new chat via live transcript
        await dbService.createChat(newChat);
     }
 
@@ -415,6 +605,139 @@ const App: React.FC = () => {
     isAtBottomRef.current = true;
   };
 
+  // --- Handle Call End: Send all transcripts to chat and save to RAG ---
+  const handleCallEnd = async (transcripts: Array<{ text: string; role: 'user' | 'model' }>) => {
+    if (!transcripts || transcripts.length === 0) {
+      console.log("[Voice] No transcripts to save");
+      return;
+    }
+
+    console.log("[Voice] Processing call end with", transcripts.length, "transcripts");
+    console.log("[Voice] Transcripts breakdown:");
+    transcripts.forEach((t, i) => {
+      console.log(`  [${i}] Role: ${t.role}, Text: ${t.text.slice(0, 60)}...`);
+    });
+
+    let chatId = activeChatId;
+    let currentChatList = [...chats];
+    let isNewChat = false;
+
+    // If no active chat, create one for the voice session
+    if (!chatId) {
+       const newChatId = uuidv4();
+       const firstUserMessage = transcripts.find(t => t.role === 'user')?.text || '';
+       const newChat: ChatSession = {
+           id: newChatId,
+           title: firstUserMessage.slice(0, 60) || "Voice Chat", 
+           isPinned: false,
+           messages: [],
+           personaId: currentPersona.id,
+           lastUpdated: Date.now()
+       };
+       chatId = newChatId;
+       currentChatList = [newChat, ...chats];
+       setChats(currentChatList);
+       setActiveChatId(chatId);
+       isNewChat = true;
+       setIsSidebarOpen(false);
+       await dbService.createChat(newChat);
+       console.log("[Voice] Created new chat for voice session:", chatId);
+    }
+
+    // Get current chat to check for existing messages
+    const currentChat = currentChatList.find(c => c.id === chatId);
+    if (!currentChat) return;
+
+    // Create messages from transcripts
+    const messagesToAdd: Message[] = transcripts
+      .filter(t => t.text.trim())
+      .map((t, idx) => ({
+        id: uuidv4(),
+        role: t.role,
+        content: t.text.trim(),
+        timestamp: Date.now() + idx, // Ensure unique timestamps for ordering
+        type: 'text' as const
+      }));
+
+    if (messagesToAdd.length === 0) {
+      console.log("[Voice] No valid messages to add");
+      return;
+    }
+
+    console.log("[Voice] Adding", messagesToAdd.length, "messages to chat");
+
+    // Add all messages to the chat
+    setChats(prev => prev.map(c => {
+        if (c.id === chatId) {
+            // Merge with existing messages, avoiding duplicates based on content
+            const existingContents = new Set(c.messages.map(m => m.content));
+            const newMessages = messagesToAdd.filter(m => !existingContents.has(m.content));
+            
+            return {
+                ...c,
+                messages: [...c.messages, ...newMessages],
+                lastUpdated: Date.now()
+            };
+        }
+        return c;
+    }));
+
+    // Save messages to database
+    const existingChat = currentChatList.find(c => c.id === chatId);
+    const existingContents = new Set(existingChat?.messages.map(m => m.content) || []);
+    
+    for (const msg of messagesToAdd) {
+      if (!existingContents.has(msg.content)) {
+        await dbService.addMessage(chatId, msg);
+      }
+    }
+
+    // --- Save voice conversation to RAG memory ---
+    // This allows the RAG system to reference past voice conversations
+    if (session?.user?.id) {
+      // Group transcripts into conversation pairs and save to RAG
+      const userMessages = transcripts.filter(t => t.role === 'user').map(t => t.text.trim()).filter(Boolean);
+      const modelMessages = transcripts.filter(t => t.role === 'model').map(t => t.text.trim()).filter(Boolean);
+      
+      // Save each user-model exchange to RAG for better retrieval
+      const maxPairs = Math.max(userMessages.length, modelMessages.length);
+      for (let i = 0; i < maxPairs; i++) {
+        const userMsg = userMessages[i] || '';
+        const modelMsg = modelMessages[i] || '';
+        
+        if (userMsg || modelMsg) {
+          // Fire and forget - don't await to avoid blocking
+          ragService.saveMemory(
+            session.user.id, 
+            chatId!, 
+            userMsg || "[Voice interaction]", 
+            modelMsg || "[Voice response]"
+          ).then(() => {
+            console.log("[Voice] Saved voice exchange to RAG memory");
+          }).catch(err => {
+            console.warn("[Voice] Failed to save to RAG:", err);
+          });
+        }
+      }
+    }
+
+    // Generate title if this is a new chat with voice content
+    if (isNewChat && messagesToAdd.length > 0) {
+      const firstUserMsg = messagesToAdd.find(m => m.role === 'user')?.content || '';
+      if (firstUserMsg) {
+        generateChatTitle(firstUserMsg).then(async (aiTitle) => {
+          if (!aiTitle) return;
+          const cleanTitle = aiTitle.replace(/^"|"$/g, '');
+          setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: cleanTitle } : c));
+          await dbService.updateChat(chatId!, { title: cleanTitle });
+        });
+      }
+    }
+
+    isAtBottomRef.current = true;
+    setTimeout(() => scrollToBottom('smooth'), 100);
+  };
+
   // --- NEW: Handle Send Message (Receives data from ChatInput) ---
   const handleSendMessage = async (text: string, files: any[], useSearch: boolean, responseLength: 'concise' | 'detailed', isVoiceActive: boolean, modelId: ModelId, personaId: string) => {
     
@@ -429,7 +752,8 @@ const App: React.FC = () => {
     const initialText = text.trim() || files[0]?.name || "New Chat";
 
     if (!chatId) {
-      const title = `${usedPersona.name} - ${initialText.slice(0, 40)}`;
+      // Use a neutral, persona-agnostic placeholder title until the AI title is generated
+      const title = initialText.slice(0, 60);
       const newChat: ChatSession = {
         id: uuidv4(),
         title: title,
@@ -442,6 +766,7 @@ const App: React.FC = () => {
       currentChatList = [newChat, ...chats];
       setActiveChatId(chatId);
       isNewChat = true;
+      setIsSidebarOpen(false); // Close sidebar when starting new chat
       dbService.createChat(newChat); 
     }
 
@@ -504,18 +829,35 @@ const App: React.FC = () => {
 
     // --- RAG & Title Generation (Background) ---
 
-    // 1. Fetch RAG Context (Non-blocking UI, but blocks model request)
+    // 1. Fetch RAG Context with conversation awareness
+    // Build a brief summary of current conversation topic from recent messages
     let ragContext = "";
     if (text.trim()) {
-       ragContext = await ragService.getRagContext(text);
+       const updatedChat = updatedChats.find(c => c.id === chatId);
+       let conversationSummary = "";
+       
+       // Extract topic context from recent messages (last 3 exchanges max)
+       if (updatedChat && updatedChat.messages.length > 0) {
+         const recentMessages = updatedChat.messages.slice(-6); // Last 3 exchanges
+         const topics = recentMessages
+           .filter(m => m.role === 'user')
+           .map(m => m.content.slice(0, 100))
+           .join('; ');
+         if (topics) {
+           conversationSummary = topics.slice(0, 300); // Cap at 300 chars
+         }
+       }
+       
+       const conversationLength = updatedChat?.messages.length || 0;
+       ragContext = await ragService.getRagContext(text, chatId!, conversationSummary, conversationLength);
     }
 
-    // 2. Title Gen
+    // 2. Title Gen - use AI-only title (no persona prefix)
     if (shouldGenerateTitle && initialText.length > 0) {
       generateChatTitle(initialText).then(async (aiTitle) => {
            if (!aiTitle) return;
            const cleanTitle = aiTitle.replace(/^"|"$/g, '');
-           const finalTitle = `${usedPersona.name} - ${cleanTitle}`;
+           const finalTitle = cleanTitle;
            setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: finalTitle } : c));
            await dbService.updateChat(chatId!, { title: finalTitle });
       });
@@ -791,7 +1133,9 @@ const App: React.FC = () => {
         onClose={() => setIsLiveMode(false)} 
         persona={currentPersona} 
         voiceName={voiceName}
-        onTranscript={handleLiveTranscript} // Pass the handler
+        ragContext={liveRagContext}
+        onTranscript={handleLiveTranscript} // Pass the handler for incremental updates
+        onCallEnd={handleCallEnd} // Pass the handler for sending all transcripts when call ends
       />
       
       <SettingsModal 
@@ -804,6 +1148,8 @@ const App: React.FC = () => {
         voiceName={voiceName}
         setVoiceName={setVoiceName}
         usageStats={usageStats}
+        defaultModel={defaultModel}
+        setDefaultModel={setDefaultModel}
       />
 
       <VaultModal 
@@ -820,7 +1166,7 @@ const App: React.FC = () => {
 
       <Sidebar 
         chats={chats} folders={folders} personas={personas} activeChatId={activeChatId}
-        onSelectChat={setActiveChatId} onNewChat={() => createNewChat()} onCreateFolder={handleCreateFolder}
+        onSelectChat={handleSelectChat} onNewChat={() => createNewChat()} onCreateFolder={handleCreateFolder}
         onMoveChat={handleMoveChat} onDeleteChat={handleDeleteChat} onRenameChat={handleRenameChat}
         onTogglePin={handleTogglePin} onRenameFolder={handleRenameFolder} onDeleteFolder={handleDeleteFolder}
         onNewChatInFolder={(fid) => createNewChat(undefined, fid)} isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen}
@@ -830,21 +1176,21 @@ const App: React.FC = () => {
 
       <div className="flex-1 flex flex-col z-10 h-full relative min-w-0">
         
-        {/* Top Bar - Compact on mobile */}
-        <div className="relative z-20 h-12 md:h-14 flex items-center justify-between px-3 md:px-6 bg-white/30 dark:bg-[#0f172a]/40 backdrop-blur-md flex-shrink-0 border-b border-white/40 dark:border-white/5">
+        {/* Top Bar - Touch-optimized for mobile */}
+        <div className="relative z-20 h-14 md:h-14 flex items-center justify-between px-2 md:px-6 bg-white/30 dark:bg-[#0f172a]/40 backdrop-blur-md flex-shrink-0 border-b border-white/40 dark:border-white/5 safe-area-top">
            <div className="flex items-center gap-2 md:gap-3 min-w-0">
-             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-500 hover:text-indigo-600 transition-colors">
-               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5 md:w-6 md:h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
+             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-500 hover:text-indigo-600 active:scale-95 transition-all rounded-xl hover:bg-black/5 dark:hover:bg-white/5">
+               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
              </button>
-             <h2 className="font-bold text-gray-800 dark:text-white truncate text-sm md:text-base max-w-[180px] md:max-w-none">
+             <h2 className="font-bold text-gray-800 dark:text-white truncate text-base md:text-base max-w-[200px] md:max-w-none">
                 {activeChat ? activeChat.title : 'Lumi'}
                 {isLoadingData && <span className="hidden md:inline text-xs font-normal text-indigo-500 ml-2 animate-pulse">(Syncing...)</span>}
              </h2>
            </div>
            
-           <div className="flex items-center gap-2 flex-shrink-0">
-             <button onClick={() => setIsLiveMode(true)} className="p-2 rounded-full bg-gradient-to-r from-red-500 to-pink-500 text-white shadow-lg shadow-pink-500/20 hover:scale-105 active:scale-95 transition-transform" title="Start Live Voice Chat">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 md:w-5 md:h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" /></svg>
+           <div className="flex items-center gap-1 flex-shrink-0">
+             <button onClick={startLiveMode} className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-gradient-to-r from-red-500 to-pink-500 text-white shadow-lg shadow-pink-500/20 hover:scale-105 active:scale-90 transition-transform" title="Start Live Voice Chat">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" /></svg>
              </button>
            </div>
         </div>
@@ -857,7 +1203,12 @@ const App: React.FC = () => {
                if (!chat) return null;
                const isActive = activeChatId === tabId;
                return (
-                 <div key={tabId} onClick={() => handleTabClick(tabId)} className={`group relative flex items-center justify-between gap-2 px-3 h-8 min-w-[120px] max-w-[200px] rounded-t-lg cursor-pointer select-none transition-all duration-200 border-t-2 ${isActive ? 'bg-white dark:bg-[#1e293b]/60 text-indigo-600 dark:text-indigo-300 border-indigo-500 shadow-sm z-10 backdrop-blur-sm' : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-white/40 dark:hover:bg-white/5 border-transparent hover:text-gray-700 dark:hover:text-gray-200'}`}>
+                 <div 
+                   key={tabId} 
+                   onClick={() => handleTabClick(tabId)} 
+                   onContextMenu={(e) => handleTabContextMenu(e, tabId)}
+                   className={`group relative flex items-center justify-between gap-2 px-3 h-8 min-w-[120px] max-w-[200px] rounded-t-lg cursor-pointer select-none transition-all duration-200 border-t-2 ${isActive ? 'bg-white dark:bg-[#1e293b]/60 text-indigo-600 dark:text-indigo-300 border-indigo-500 shadow-sm z-10 backdrop-blur-sm' : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-white/40 dark:hover:bg-white/5 border-transparent hover:text-gray-700 dark:hover:text-gray-200'}`}
+                 >
                    <span className="text-xs font-medium truncate flex-1">{chat.title}</span>
                    <button onClick={(e) => handleCloseTab(e, tabId)} className={`p-0.5 rounded-md opacity-0 group-hover:opacity-100 hover:bg-gray-200 dark:hover:bg-white/10 transition-all ${isActive ? 'opacity-100' : ''}`}>
                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3 h-3"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
@@ -867,6 +1218,20 @@ const App: React.FC = () => {
                );
              })}
           </div>
+        )}
+
+        {tabContextMenu && (
+          <ContextMenu
+            x={tabContextMenu.x}
+            y={tabContextMenu.y}
+            onClose={() => setTabContextMenu(null)}
+            items={[
+              { label: 'Close', onClick: () => handleCloseTab({ stopPropagation: () => {} } as any, tabContextMenu.chatId) },
+              { label: 'Close Others', onClick: handleCloseOthers },
+              { label: 'Close to the Right', onClick: handleCloseToRight },
+              { label: 'Close All', onClick: handleCloseAll, danger: true }
+            ]}
+          />
         )}
 
         {/* Chat Area */}
@@ -885,7 +1250,7 @@ const App: React.FC = () => {
             </div>
           )}
 
-          <div className="absolute inset-0 overflow-y-auto p-4 md:p-8 space-y-4" ref={chatContainerRef} onScroll={handleScroll}>
+          <div className="absolute inset-0 overflow-y-auto px-3 py-4 md:p-8 space-y-4" ref={chatContainerRef} onScroll={handleScroll}>
              {!activeChat ? (
                <div className="h-full flex flex-col items-center justify-center opacity-80 mt-[-50px]">
                   <div className="w-24 h-24 bg-white/50 dark:bg-white/5 rounded-full flex items-center justify-center mb-6 shadow-xl backdrop-blur-md animate-bounce-slow border border-white/20 dark:border-white/10"><img src="https://xcjqilfhlwbykckzdzry.supabase.co/storage/v1/object/public/images/50ad6e29-e72e-4158-b9cf-486ab30c64c5/d7a6feb7-13c3-4823-84ef-913e89786d2d.png" alt="Lumi" className="w-16 h-16 object-contain" /></div>
@@ -914,6 +1279,10 @@ const App: React.FC = () => {
           onCreatePersona={startCreatingPersona}
           onEditPersona={startEditingPersona}
           onDeletePersona={handleDeletePersona}
+          defaultModel={defaultModel}
+          activeChatModelId={activeChat?.modelId}
+          activeChatUseSearch={activeChat?.useSearch}
+          onSaveChatSettings={handleSaveChatSettings}
         />
 
       </div>

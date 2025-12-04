@@ -1,8 +1,8 @@
-
-
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { UsageStats } from '../services/dbService';
-import { AVAILABLE_MODELS } from '../types';
+import { AVAILABLE_MODELS, ModelId } from '../types';
+import { previewVoice } from '../services/geminiService';
+import { AudioUtils } from '../services/audioUtils';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -15,6 +15,8 @@ interface SettingsModalProps {
   setVoiceName: (name: string) => void;
   usageStats?: UsageStats;
   onUpdateApiKey?: () => void;
+  defaultModel: ModelId;
+  setDefaultModel: (modelId: ModelId) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ 
@@ -27,9 +29,91 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   voiceName,
   setVoiceName,
   usageStats = { inputTokens: 0, outputTokens: 0, modelBreakdown: {} },
-  onUpdateApiKey
+  onUpdateApiKey,
+  defaultModel,
+  setDefaultModel
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'dashboard'>('general');
+  const [playingVoice, setPlayingVoice] = useState<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  // Cleanup audio when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      if (currentSourceRef.current) {
+        try { currentSourceRef.current.stop(); } catch (e) {}
+        currentSourceRef.current = null;
+        setPlayingVoice(null);
+      }
+    }
+  }, [isOpen]);
+
+  const handlePreview = async (name: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    // If clicking the same voice that's currently playing, stop it (toggle behavior)
+    if (playingVoice === name && currentSourceRef.current) {
+      try {
+        currentSourceRef.current.stop();
+      } catch (e) {}
+      currentSourceRef.current = null;
+      setPlayingVoice(null);
+      return;
+    }
+    
+    // Stop current if playing a different voice
+    if (currentSourceRef.current) {
+      try {
+        currentSourceRef.current.stop();
+      } catch (e) {}
+      currentSourceRef.current = null;
+      setPlayingVoice(null);
+    }
+
+    try {
+      setPlayingVoice(name);
+      
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      const ctx = audioContextRef.current;
+      if (ctx.state === 'suspended') await ctx.resume();
+
+      // Call the server-side TTS using Gemini 2.5 Flash Preview TTS model
+      const base64Audio = await previewVoice(name);
+      
+      if (!base64Audio) {
+          setPlayingVoice(null);
+          alert('Failed to load voice preview. Please try again.');
+          return;
+      }
+
+      const audioData = AudioUtils.decode(base64Audio);
+      const audioBuffer = await AudioUtils.decodeAudioData(audioData, ctx, 24000);
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+      
+      source.onended = () => {
+        setPlayingVoice(null);
+        currentSourceRef.current = null;
+      };
+      
+      currentSourceRef.current = source;
+      source.start();
+
+    } catch (err: any) {
+      console.error("Preview failed", err);
+      setPlayingVoice(null);
+      currentSourceRef.current = null;
+      
+      // Show user-friendly error message
+      const errorMsg = err?.message || err?.error?.message || 'Failed to preview voice';
+      alert(`Voice preview error: ${errorMsg}`);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -137,33 +221,137 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </button>
                 </div>
 
+                {/* Default Model Settings */}
+                <div>
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Default Model</h3>
+                  <div className="space-y-2 max-h-[280px] overflow-y-auto custom-scrollbar pr-1">
+                    {AVAILABLE_MODELS.map(model => {
+                      const isSelected = defaultModel === model.id;
+                      // Color-code by cost tier
+                      const costTier = model.costInput < 0.2 ? 'budget' : model.costInput < 2 ? 'standard' : 'premium';
+                      const tierColors = {
+                        budget: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800',
+                        standard: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800',
+                        premium: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800'
+                      };
+                      const tierBadgeColors = {
+                        budget: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
+                        standard: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400',
+                        premium: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400'
+                      };
+                      
+                      return (
+                        <button
+                          key={model.id}
+                          onClick={() => setDefaultModel(model.id)}
+                          className={`w-full p-3 rounded-xl border-2 text-left transition-all ${
+                            isSelected 
+                              ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 ring-2 ring-indigo-500/20' 
+                              : `${tierColors[costTier]} hover:border-gray-300 dark:hover:border-slate-500`
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className={`font-semibold text-sm ${isSelected ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-800 dark:text-gray-200'}`}>
+                                  {model.name}
+                                </span>
+                                {isSelected && (
+                                  <svg className="w-4 h-4 text-indigo-600 dark:text-indigo-400" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                  </svg>
+                                )}
+                              </div>
+                              <p className={`text-xs mt-0.5 ${isSelected ? 'text-indigo-600/70 dark:text-indigo-400/70' : 'text-gray-500 dark:text-gray-400'}`}>
+                                {model.description}
+                              </p>
+                            </div>
+                            <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${tierBadgeColors[costTier]}`}>
+                                {costTier === 'budget' ? '💰 Budget' : costTier === 'standard' ? '⚡ Standard' : '🔥 Premium'}
+                              </span>
+                            </div>
+                          </div>
+                          <div className={`mt-2 pt-2 border-t ${isSelected ? 'border-indigo-200 dark:border-indigo-700' : 'border-gray-200 dark:border-slate-600'}`}>
+                            <div className="flex items-center justify-between text-[10px]">
+                              <div className={`flex items-center gap-3 ${isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                                <span className="flex items-center gap-1">
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
+                                  </svg>
+                                  ${model.costInput.toFixed(2)}/1M
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                                  </svg>
+                                  ${model.costOutput.toFixed(2)}/1M
+                                </span>
+                              </div>
+                              <span className={`font-mono ${isSelected ? 'text-indigo-500 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500'}`}>
+                                ~${((model.costInput + model.costOutput) / 2).toFixed(2)}/1M avg
+                              </span>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2 text-center">
+                    Prices are per 1 million tokens. Input = your messages, Output = AI responses.
+                  </p>
+                </div>
+
                 {/* Voice Settings */}
                 <div>
                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Live Voice</h3>
                    <div className="grid grid-cols-2 gap-2">
-                     {[
-                       { name: 'Kore', label: 'Kore (Female)', gender: 'Female' },
-                       { name: 'Aoede', label: 'Aoede (Female)', gender: 'Female' },
-                       { name: 'Puck', label: 'Puck (Male)', gender: 'Male' },
-                       { name: 'Fenrir', label: 'Fenrir (Male)', gender: 'Male' },
-                       { name: 'Charon', label: 'Charon (Male)', gender: 'Male' },
-                     ].map((v) => (
-                       <button
-                         key={v.name}
-                         onClick={() => setVoiceName(v.name)}
-                         className={`p-2 rounded-lg text-xs font-medium border transition-all text-left flex items-center justify-between
-                           ${voiceName === v.name 
-                             ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
-                             : 'bg-white dark:bg-slate-700 border-gray-200 dark:border-slate-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-600'
-                           }
-                         `}
-                       >
-                         <span>{v.name}</span>
-                         <span className={`text-[10px] opacity-70 ${voiceName === v.name ? 'text-indigo-100' : 'text-gray-400'}`}>
-                            {v.gender}
-                         </span>
-                       </button>
-                     ))}
+                  {[
+                    { name: 'Kore', label: 'Kore (Female)', gender: 'Female' },
+                    { name: 'Aoede', label: 'Aoede (Female)', gender: 'Female' },
+                    { name: 'Puck', label: 'Puck (Male)', gender: 'Male' },
+                    { name: 'Fenrir', label: 'Fenrir (Male)', gender: 'Male' },
+                    { name: 'Charon', label: 'Charon (Male)', gender: 'Male' },
+                  ].map((v) => (
+                    <button
+                      key={v.name}
+                      onClick={() => setVoiceName(v.name)}
+                      className={`p-2 rounded-lg text-xs font-medium border transition-all text-left flex items-center justify-between group
+                        ${voiceName === v.name 
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
+                          : 'bg-white dark:bg-slate-700 border-gray-200 dark:border-slate-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-600'
+                        }
+                      `}
+                    >
+                      <div className="flex flex-col">
+                        <span>{v.name}</span>
+                        <span className={`text-[10px] opacity-70 ${voiceName === v.name ? 'text-indigo-100' : 'text-gray-400'}`}>
+                           {v.gender}
+                        </span>
+                      </div>
+                      <div 
+                        onClick={(e) => handlePreview(v.name, e)}
+                        className={`p-1.5 rounded-full transition-colors ${
+                          playingVoice === v.name 
+                            ? 'bg-indigo-400 text-white animate-pulse' 
+                            : voiceName === v.name 
+                              ? 'hover:bg-indigo-500 text-indigo-100' 
+                              : 'hover:bg-gray-200 dark:hover:bg-slate-500 text-gray-400'
+                        }`}
+                        title="Preview Voice"
+                      >
+                        {playingVoice === v.name ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                            <path fillRule="evenodd" d="M4.5 7.5a3 3 0 013-3h9a3 3 0 013 3v9a3 3 0 01-3 3h-9a3 3 0 01-3-3v-9z" clipRule="evenodd" />
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                            <path fillRule="evenodd" d="M4.5 5.653c0-1.426 1.529-2.33 2.779-1.643l11.54 6.348c1.295.712 1.295 2.573 0 3.285L7.28 19.991c-1.25.687-2.779-.217-2.779-1.643V5.653z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </div>
+                    </button>
+                  ))}
                    </div>
                 </div>
               </div>
@@ -200,10 +388,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Model Breakdown</h3>
                     <div className="space-y-3">
                        {breakdownEntries.map(([modelId, stats]) => {
-                         const modelName = AVAILABLE_MODELS.find(m => m.id === modelId)?.name || modelId;
-                         const modelCostConfig = AVAILABLE_MODELS.find(m => m.id === modelId);
-                         const mCost = modelCostConfig 
-                            ? (stats.input / 1000000) * modelCostConfig.costInput + (stats.output / 1000000) * modelCostConfig.costOutput
+                         const modelConfig = AVAILABLE_MODELS.find(m => m.id === modelId);
+                         const modelName = modelConfig?.name || modelId;
+                         const mCost = modelConfig 
+                            ? (stats.input / 1000000) * modelConfig.costInput + (stats.output / 1000000) * modelConfig.costOutput
                             : 0;
 
                          return (
@@ -212,10 +400,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                  <span className="font-semibold text-sm text-gray-800 dark:text-gray-200">{modelName}</span>
                                  <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">${mCost.toFixed(5)}</span>
                               </div>
-                              <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400">
+                              <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400 mb-2">
                                  <span>In: {stats.input.toLocaleString()}</span>
                                  <span>Out: {stats.output.toLocaleString()}</span>
                               </div>
+                              {modelConfig && (
+                                <div className="pt-2 border-t border-gray-200 dark:border-slate-600">
+                                   <div className="flex items-center justify-between text-[10px] text-gray-500 dark:text-gray-400">
+                                      <div className="flex items-center gap-3">
+                                         <span className="flex items-center gap-1">
+                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
+                                            </svg>
+                                            ${modelConfig.costInput.toFixed(2)}/1M
+                                         </span>
+                                         <span className="flex items-center gap-1">
+                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                                            </svg>
+                                            ${modelConfig.costOutput.toFixed(2)}/1M
+                                         </span>
+                                      </div>
+                                      <span className="font-mono">
+                                         ~${((modelConfig.costInput + modelConfig.costOutput) / 2).toFixed(2)}/1M avg
+                                      </span>
+                                   </div>
+                                </div>
+                              )}
                            </div>
                          );
                        })}
@@ -224,9 +435,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                )}
 
                <p className="text-[10px] text-gray-400 text-center">
-                  * Costs are estimated based on Gemini pricing. <br/>
-                  Flash: $0.075/1M In, $0.30/1M Out. <br/>
-                  Pro models estimated at higher rates.
+                  * Costs are estimated based on model pricing. <br/>
+                  Usage resets automatically on the last day of each month (month-to-date). <br/>
+                  Prices shown are per 1 million tokens.
                </p>
             </div>
           )}

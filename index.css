@@ -3,9 +3,43 @@
 /* Enable class-based dark mode for Tailwind v4 */
 @variant dark (&:where(.dark, .dark *));
 
+/* CSS Variables for safe areas (iPhone notch, home indicator, etc.) */
+:root {
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+}
+
 body {
   margin: 0;
   overflow: hidden;
+  /* Prevent pull-to-refresh on mobile */
+  overscroll-behavior: none;
+  /* Smooth scrolling feel */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent text selection on UI elements for native feel */
+button, .no-select {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Minimum touch target size helper */
+.touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* Safe area padding utilities */
+.safe-area-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px);
+}
+
+.safe-area-top {
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 /* Custom Scrollbar */
@@ -70,15 +104,20 @@ body {
 }
 .markdown-body p {
   margin-bottom: 0.75rem;
-  line-height: 1.6;
+  line-height: 1.7;
+  font-size: 1rem;
 }
 .dark .markdown-body p {
   color: #e2e8f0;
 }
 .markdown-body ul {
   list-style-type: disc;
-  padding-left: 1.5rem;
+  padding-left: 1.25rem;
   margin-bottom: 0.75rem;
+}
+.markdown-body ul li {
+  margin-bottom: 0.5rem;
+  line-height: 1.6;
 }
 .dark .markdown-body ul {
   color: #e2e8f0;

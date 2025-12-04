@@ -34,6 +34,123 @@ export const generateChatTitle = async (userMessage: string): Promise<string | n
   }
 };
 
+export const previewVoice = async (voiceName: string): Promise<string | null> => {
+  try {
+    const { data, error } = await supabase.functions.invoke('gemini-tts', {
+      body: { 
+        text: `Hello! I'm ${voiceName}. Nice to meet you.`,
+        voiceName 
+      }
+    });
+
+    if (error) {
+      console.error("Voice preview error:", error);
+      
+      // Try to parse the response body if available in the error context
+      // Supabase functions error usually contains the response body in the error message or context
+      if (error instanceof Error) {
+         throw error;
+      }
+      throw new Error("Voice preview failed");
+    }
+
+    if (!data?.audioData) {
+      console.error("Voice preview error: No audio data in response", data);
+      throw new Error("No audio data received from server");
+    }
+
+    return data.audioData; // Returns base64 string
+  } catch (e: any) {
+    console.error("Voice preview failed", e);
+    
+    // Extract the actual error message if it's wrapped
+    let message = e.message;
+    if (e.context && e.context.json) {
+        try {
+            const body = await e.context.json();
+            if (body.error) message = body.error;
+        } catch (jsonErr) {}
+    }
+    
+    throw new Error(message);
+  }
+};
+
+// Model-specific context window configurations
+// Smaller windows for expensive models to control costs
+const MODEL_CONTEXT_CONFIGS: Record<string, { maxMessages: number; maxContextChars: number; minRecentMessages: number }> = {
+  // Premium models - smaller context to control costs
+  'o1': { maxMessages: 10, maxContextChars: 16000, minRecentMessages: 4 },
+  'o1-mini': { maxMessages: 12, maxContextChars: 20000, minRecentMessages: 4 },
+  'gemini-3-pro-preview': { maxMessages: 14, maxContextChars: 24000, minRecentMessages: 6 },
+  'gpt-5.1': { maxMessages: 16, maxContextChars: 28000, minRecentMessages: 6 },
+  // Standard models - balanced context
+  'gpt-5-mini': { maxMessages: 20, maxContextChars: 32000, minRecentMessages: 6 },
+  'gemini-2.5-flash': { maxMessages: 24, maxContextChars: 40000, minRecentMessages: 6 },
+  // Budget models - larger context is affordable
+  'gpt-5-nano': { maxMessages: 30, maxContextChars: 48000, minRecentMessages: 8 },
+  'gemini-flash-lite-latest': { maxMessages: 30, maxContextChars: 48000, minRecentMessages: 8 },
+};
+
+// Default configuration for unknown models
+const DEFAULT_CONTEXT_CONFIG = {
+  maxMessages: 20,
+  maxContextChars: 32000,
+  minRecentMessages: 6,
+};
+
+/**
+ * Gets the appropriate context window config for a model.
+ * Expensive models get smaller windows to save costs.
+ */
+function getContextConfigForModel(modelId: string): typeof DEFAULT_CONTEXT_CONFIG {
+  return MODEL_CONTEXT_CONFIGS[modelId] || DEFAULT_CONTEXT_CONFIG;
+}
+
+/**
+ * Truncates conversation history to a reasonable window size.
+ * Prioritizes recent messages while respecting token limits.
+ * Uses model-specific limits to optimize costs.
+ */
+function getContextWindow(messages: Message[], modelId: string): Message[] {
+  const config = getContextConfigForModel(modelId);
+  
+  if (messages.length <= config.minRecentMessages) {
+    return messages;
+  }
+
+  // Start with the most recent messages
+  let selectedMessages: Message[] = [];
+  let totalChars = 0;
+  
+  // Work backwards from most recent, always including minimum recent messages
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    const msgChars = msg.content.length;
+    
+    // Always include minimum recent messages
+    const isMinimumRecent = selectedMessages.length < config.minRecentMessages;
+    
+    // Check if we'd exceed limits
+    const wouldExceedMessages = selectedMessages.length >= config.maxMessages;
+    const wouldExceedChars = totalChars + msgChars > config.maxContextChars;
+    
+    if (!isMinimumRecent && (wouldExceedMessages || wouldExceedChars)) {
+      break;
+    }
+    
+    selectedMessages.unshift(msg);
+    totalChars += msgChars;
+  }
+  
+  // Log truncation for debugging
+  if (selectedMessages.length < messages.length) {
+    console.log(`📝 Context window (${modelId}): Using ${selectedMessages.length}/${messages.length} messages (~${Math.round(totalChars/4)} tokens)`);
+  }
+  
+  return selectedMessages;
+}
+
 export const streamChatResponse = async (
   messages: Message[],
   persona: Persona,
@@ -56,7 +173,10 @@ export const streamChatResponse = async (
     systemInstruction += "\n\nIMPORTANT: Please provide a detailed, comprehensive, and in-depth response. Explain your reasoning where applicable.";
   }
 
-  const validMessages = messages.filter(m => m.content.trim() !== '');
+  // Apply context window to prevent sending entire conversation history
+  // Uses model-specific limits (expensive models get smaller windows)
+  const windowedMessages = getContextWindow(messages, modelId);
+  const validMessages = windowedMessages.filter(m => m.content.trim() !== '');
 
   // Prepare request body
   const requestBody = {
@@ -84,10 +204,13 @@ export const streamChatResponse = async (
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
           'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im13d29haGx5Z3p2aWV0bWhrbHZ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwNzc2NTUsImV4cCI6MjA3OTY1MzY1NX0.1UoXU-WHslXQQngaeRlE63Ef__o4cNFeV6K3dE_wj2w'}`,
         },
         body: JSON.stringify(requestBody),
-        signal
+        signal,
+        // Disable credentials to prevent CORS issues on mobile
+        credentials: 'omit'
       }
     );
 
