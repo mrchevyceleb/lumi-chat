@@ -8,6 +8,10 @@ export interface Message {
   groundingUrls?: Array<{ title: string; uri: string }>;
   images?: string[]; // Array of base64 data URLs for UI display
   model?: string; // Track which model generated this message
+  fileMetadata?: ProcessedFileInfo[]; // Minimal info about processed files
+  warnings?: string[]; // Non-blocking issues (truncation, unsupported files, etc.)
+  usedRagContext?: boolean; // Track if RAG memory was used for this response
+  ragContextLength?: number; // Length of RAG context used
 }
 
 export interface ChatSession {
@@ -49,6 +53,15 @@ export interface Persona {
   color: string;
 }
 
+export interface UserSettings {
+  userId?: string;
+  defaultModel?: ModelId;
+  lastModel?: ModelId;
+  voiceName?: string;
+  webSearchEnabled?: boolean;
+  updatedAt?: number;
+}
+
 export const DEFAULT_PERSONA: Persona = {
   id: 'default',
   name: 'Lumi',
@@ -79,7 +92,8 @@ export const CODING_PERSONA: Persona = {
   color: 'bg-blue-500'
 };
 
-export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-flash-lite-latest' | 'gpt-5.1' | 'gpt-5-mini' | 'gpt-5-nano' | 'o1' | 'o1-mini';
+// Keep gemini-3.0-pro in the union for backward compatibility, but primary is gemini-3-pro-preview
+export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-3.0-pro' | 'gemini-flash-lite-latest' | 'gpt-5.1' | 'gpt-5-mini' | 'gpt-5-nano' | 'o1' | 'o1-mini';
 
 export interface ModelConfig {
   id: ModelId;
@@ -144,9 +158,33 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
   },
   { 
     id: 'gemini-3-pro-preview', 
-    name: 'Gemini 3 Pro', 
-    description: 'Flagship preview model.', 
+    name: 'Gemini 3 Pro (Preview)', 
+    description: 'Flagship model (preview) for depth & quality.', 
     costInput: 2.00, 
     costOutput: 12.00 
   }
 ];
+
+export interface FileAttachment {
+  id?: string;
+  name: string;
+  mimeType: string;
+  size?: number;
+  bucket?: string;
+  path?: string;      // Supabase Storage path (when uploaded)
+  data?: string;      // Base64 payload for inline items (e.g., images)
+  isTextContext?: boolean; // Whether to treat as plain text context
+}
+
+export interface ProcessedFileInfo {
+  id?: string;
+  name: string;
+  mimeType?: string;
+  size?: number;
+  bucket?: string;
+  path?: string;
+  kind?: 'pdf' | 'zip' | 'text' | 'image' | 'other';
+  zipEntryPath?: string;
+  truncated?: boolean;
+  warning?: string;
+}

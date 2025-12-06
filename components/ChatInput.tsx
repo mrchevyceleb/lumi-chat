@@ -1,10 +1,40 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import JSZip from 'jszip';
-import { AVAILABLE_MODELS, ModelId, Persona } from '../types';
+import { AVAILABLE_MODELS, ModelId, Persona, FileAttachment } from '../types';
+import { supabase } from '../services/supabaseClient';
+
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25MB safety cap
+const ACCEPTED_UPLOAD_MIMES = new Set([
+  'application/pdf',
+  'application/zip',
+  'application/x-zip-compressed'
+]);
+const INLINE_TEXT_EXT = /\.(md|txt|csv|json)$/i;
+
+const sanitizeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, '_');
+const buildStoragePath = (userId: string, file: File) => {
+  const suffix = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+  return `${userId}/${Date.now()}-${suffix}-${sanitizeFileName(file.name)}`;
+};
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+const readFileAsText = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string) || '');
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
 
 interface ChatInputProps {
-  onSendMessage: (text: string, files: any[], useSearch: boolean, responseLength: 'concise' | 'detailed', isVoiceActive: boolean, modelId: ModelId, personaId: string) => void;
+  onSendMessage: (text: string, files: FileAttachment[], useSearch: boolean, responseLength: 'concise' | 'detailed', isVoiceActive: boolean, modelId: ModelId, personaId: string) => void;
   onStop: () => void;
   isTyping: boolean;
   personas: Persona[];
@@ -13,7 +43,10 @@ interface ChatInputProps {
   onCreatePersona: () => void;
   onEditPersona: (persona: Persona) => void;
   onDeletePersona: (personaId: string) => void;
-  defaultModel: ModelId;
+  selectedModel: ModelId;
+  onModelChange: (modelId: ModelId) => void;
+  useSearch: boolean;
+  onToggleSearch: (value: boolean) => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({ 
@@ -26,15 +59,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onCreatePersona,
   onEditPersona,
   onDeletePersona,
-  defaultModel
+  selectedModel,
+  onModelChange,
+  useSearch,
+  onToggleSearch
 }) => {
   const [input, setInput] = useState('');
-  const [attachedFiles, setAttachedFiles] = useState<{name: string, data: string, mimeType: string, isTextContext?: boolean}[]>([]);
-  const [useSearch, setUseSearch] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
   const [responseLength, setResponseLength] = useState<'concise' | 'detailed'>('detailed');
   const [isListening, setIsListening] = useState(false);
-  // Default to the defaultModel prop or first available model
-  const [selectedModel, setSelectedModel] = useState<ModelId>(defaultModel || AVAILABLE_MODELS[0].id);
   
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showPersonaMenu, setShowPersonaMenu] = useState(false);
@@ -50,13 +83,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const personaMenuRef = useRef<HTMLDivElement>(null);
   const mobileOptionsRef = useRef<HTMLDivElement>(null); // NEW: Ref for mobile menu
-
-  // Sync selected model with default model from settings when it changes
-  useEffect(() => {
-    if (defaultModel && AVAILABLE_MODELS.some(m => m.id === defaultModel)) {
-      setSelectedModel(defaultModel);
-    }
-  }, [defaultModel]);
 
   // --- Close menus on click outside
   useEffect(() => {
@@ -108,70 +134,90 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   // --- File Processing ---
+  const uploadToStorage = async (file: File): Promise<FileAttachment | null> => {
+    if (file.size > MAX_UPLOAD_BYTES) {
+      alert(`"${file.name}" is too large. Max size is ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB.`);
+      return null;
+    }
+
+    const { data } = await supabase.auth.getUser();
+    const userId = data.user?.id;
+    if (!userId) {
+      alert("Please sign in before uploading files.");
+      return null;
+    }
+
+    const path = buildStoragePath(userId, file);
+    const { error } = await supabase.storage
+      .from('uploads')
+      .upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false });
+
+    if (error) {
+      console.error("Upload failed", error);
+      alert(`Could not upload ${file.name}.`);
+      return null;
+    }
+
+    return {
+      name: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      size: file.size,
+      bucket: 'uploads',
+      path
+    };
+  };
+
   const processFile = async (file: File) => {
-    // 1. Handle Zip Files (Code Analysis)
-    if (file.name.endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed') {
-      try {
-        const zip = new JSZip();
-        const loadedZip = await zip.loadAsync(file);
-        let combinedSourceCode = `SOURCE CODE CONTEXT FROM ARCHIVE '${file.name}':\n\n`;
-        let fileCount = 0;
+    const mimeType = file.type || 'application/octet-stream';
+    const lower = file.name.toLowerCase();
+    const isPdf = mimeType === 'application/pdf' || lower.endsWith('.pdf');
+    const isZip = ACCEPTED_UPLOAD_MIMES.has(mimeType) || lower.endsWith('.zip');
 
-        // Iterate through files
-        const filePromises: Promise<void>[] = [];
-        loadedZip.forEach((relativePath, zipEntry) => {
-          const promise = (async () => {
-            if (zipEntry.dir) return;
-            // Filter for code/text files
-            const isCode = /\.(js|ts|jsx|tsx|py|html|css|json|md|txt|java|c|cpp|h|rs|go|rb|php|sql)$/i.test(relativePath);
-            
-            if (isCode) {
-              const content = await zipEntry.async("string");
-              combinedSourceCode += `--- FILE: ${relativePath} ---\n${content}\n\n`;
-              fileCount++;
-            }
-          })();
-          filePromises.push(promise);
-        });
-
-        await Promise.all(filePromises);
-        
-        if (fileCount > 0) {
-          setAttachedFiles(prev => [...prev, {
-            name: `${file.name} (Extracted ${fileCount} files)`,
-            data: combinedSourceCode,
-            mimeType: 'text/plain',
-            isTextContext: true
-          }]);
-        } else {
-          alert("No readable code files found in zip.");
-        }
-      } catch (err) {
-        console.error("Failed to unzip", err);
-        alert("Could not analyze zip file. It might be corrupted.");
+    if (isPdf || isZip) {
+      const uploaded = await uploadToStorage(file);
+      if (uploaded) {
+        setAttachedFiles(prev => [...prev, uploaded]);
       }
       return;
     }
 
-    // 2. Handle Regular Files (Images, etc)
-    const reader = new FileReader();
-    reader.onload = (readEvent) => {
-      const base64Raw = readEvent.target?.result as string;
+    const isText = mimeType.startsWith('text/') || INLINE_TEXT_EXT.test(lower);
+    if (isText) {
+      try {
+        const text = await readFileAsText(file);
+        setAttachedFiles(prev => [...prev, {
+          name: file.name,
+          mimeType,
+          data: text,
+          isTextContext: true
+        }]);
+      } catch (err) {
+        console.error("Failed to read text file", err);
+        alert(`Could not read ${file.name}`);
+      }
+      return;
+    }
+
+    try {
+      const base64Raw = await readFileAsDataUrl(file);
       const base64Data = base64Raw.split(',')[1];
-      
       setAttachedFiles(prev => [...prev, {
         name: file.name,
         data: base64Data,
-        mimeType: file.type || 'application/octet-stream'
+        mimeType
       }]);
-    };
-    reader.readAsDataURL(file);
+    } catch (err) {
+      console.error("Failed to read file", err);
+      alert(`Could not attach ${file.name}`);
+    }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-    Array.from(files).forEach(processFile);
+    for (const file of Array.from(files)) {
+      await processFile(file);
+    }
     e.target.value = ''; // reset
   };
 
@@ -304,16 +350,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                            <div>
                              <div className="text-xs font-bold text-gray-400 uppercase mb-1">Model</div>
                              <div className="space-y-1">
-                               {AVAILABLE_MODELS.map(model => (
-                                 <button
-                                   key={model.id}
-                                   onClick={() => { setSelectedModel(model.id); setShowMobileOptions(false); }}
-                                   className={`w-full text-left px-2 py-1.5 rounded-lg text-xs transition-colors flex items-center justify-between ${selectedModel === model.id ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
-                                 >
-                                   <span>{model.name}</span>
-                                   {selectedModel === model.id && <span>✓</span>}
-                                 </button>
-                               ))}
+                              {AVAILABLE_MODELS.map(model => (
+                                <button
+                                  key={model.id}
+                                  onClick={() => { onModelChange(model.id); setShowMobileOptions(false); }}
+                                  className={`w-full text-left px-2 py-1.5 rounded-lg text-xs transition-colors flex items-center justify-between ${selectedModel === model.id ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
+                                >
+                                  <span>{model.name}</span>
+                                  {selectedModel === model.id && <span>✓</span>}
+                                </button>
+                              ))}
                              </div>
                            </div>
 
@@ -340,10 +386,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                            <div>
                              <div className="text-xs font-bold text-gray-400 uppercase mb-1">Tools</div>
                              <div className="flex flex-col gap-1">
-                               <button 
-                                 onClick={() => { setUseSearch(!useSearch); setShowMobileOptions(false); }}
-                                 className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${useSearch ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
-                               >
+                              <button 
+                                onClick={() => { onToggleSearch(!useSearch); setShowMobileOptions(false); }}
+                                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${useSearch ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
+                              >
                                  <span className="text-lg">🌍</span>
                                  <span>Google Search {useSearch ? '(On)' : '(Off)'}</span>
                                </button>
@@ -363,8 +409,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                    {/* Attachment Button - Always visible */}
                    <button 
                      onClick={() => fileInputRef.current?.click()}
-                     className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-indigo-500 transition-colors rounded-xl hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95"
-                     title="Attach file (Image or Zip)"
+                   className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-indigo-500 transition-colors rounded-xl hover:bg-gray-100 dark:hover:bg-slate-700 active:scale-95"
+                   title="Attach file (Image, PDF, ZIP, text)"
                    >
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
                         <path strokeLinecap="round" strokeLinejoin="round" d="m18.375 12.739-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l10.94-10.94A3 3 0 1 1 19.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 0 0 2.112 2.13" />
@@ -374,7 +420,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                      type="file" 
                      multiple 
                      ref={fileInputRef} 
-                     className="hidden" 
+                    className="hidden" 
+                    accept=".pdf,.zip,.txt,.md,.json,.csv,image/*"
                      onChange={handleFileUpload} 
                    />
 
@@ -390,11 +437,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                    </button>
 
                    {/* Google Search Toggle - Hidden on mobile */}
-                   <button 
-                     onClick={() => setUseSearch(!useSearch)}
-                     className={`hidden md:block p-2 md:p-3 transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 ${useSearch ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500'}`}
-                     title="Toggle Google Search"
-                   >
+                  <button 
+                    onClick={() => onToggleSearch(!useSearch)}
+                    className={`hidden md:block p-2 md:p-3 transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 ${useSearch ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500'}`}
+                    title="Toggle Google Search"
+                  >
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />
                       </svg>
@@ -522,7 +569,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             {AVAILABLE_MODELS.map(model => (
                               <button
                                 key={model.id}
-                                onClick={() => { setSelectedModel(model.id); setShowModelMenu(false); }}
+                                onClick={() => { onModelChange(model.id); setShowModelMenu(false); }}
                                 className={`w-full text-left p-2 rounded-lg text-xs transition-colors flex flex-col ${selectedModel === model.id ? 'bg-indigo-50 dark:bg-slate-700' : 'hover:bg-gray-50 dark:hover:bg-slate-700'}`}
                               >
                                 <div className="flex items-center justify-between">

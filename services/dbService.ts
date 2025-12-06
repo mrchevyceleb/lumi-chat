@@ -1,6 +1,6 @@
 
 import { supabase } from './supabaseClient';
-import { ChatSession, Message, Folder, Persona, VaultFolder, VaultItem } from '../types';
+import { ChatSession, Message, Folder, Persona, VaultFolder, VaultItem, ModelId, UserSettings, AVAILABLE_MODELS } from '../types';
 
 export interface UsageStats {
     inputTokens: number;
@@ -23,7 +23,98 @@ const logError = (context: string, error: any) => {
     console.error(`${context}:`, error?.message || error || "Unknown error");
 };
 
+const DEFAULT_VOICE_NAME = 'Kore';
+const DEFAULT_MODEL_ID: ModelId = AVAILABLE_MODELS[0]?.id || 'gemini-2.5-flash';
+
+const mapSettingsRow = (row: any): UserSettings => ({
+    userId: row?.user_id,
+    defaultModel: (row?.default_model as ModelId) || DEFAULT_MODEL_ID,
+    lastModel: (row?.last_model as ModelId) || (row?.default_model as ModelId) || DEFAULT_MODEL_ID,
+    voiceName: row?.voice_name || DEFAULT_VOICE_NAME,
+    webSearchEnabled: row?.web_search_enabled ?? false,
+    updatedAt: row?.updated_at ? toTimestamp(row.updated_at) : undefined,
+});
+
+const baseSettings = (): UserSettings => ({
+    defaultModel: DEFAULT_MODEL_ID,
+    lastModel: DEFAULT_MODEL_ID,
+    voiceName: DEFAULT_VOICE_NAME,
+    webSearchEnabled: false
+});
+
 export const dbService = {
+
+  // --- User Settings ---
+  async getUserSettings(): Promise<UserSettings> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { ...baseSettings() };
+
+    try {
+        const { data, error } = await supabase
+          .from('user_settings')
+          .select('*')
+          .eq('user_id', user.id)
+          .single();
+
+        if (error) {
+            if (error.code !== 'PGRST116') {
+                logError("User settings not available", error);
+            }
+            return { ...baseSettings(), userId: user.id };
+        }
+
+        if (data) {
+            return mapSettingsRow(data);
+        }
+    } catch (e) {
+        logError("User settings fetch failed", e);
+    }
+
+    return { ...baseSettings(), userId: user.id };
+  },
+
+  async saveUserSettings(partial: Partial<UserSettings>): Promise<UserSettings> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { ...baseSettings() };
+
+    const current = await dbService.getUserSettings();
+    const merged: UserSettings = {
+        ...baseSettings(),
+        ...current,
+        ...partial
+    };
+
+    if (!merged.lastModel) {
+        merged.lastModel = merged.defaultModel;
+    }
+
+    try {
+        const payload = {
+            user_id: user.id,
+            default_model: merged.defaultModel,
+            last_model: merged.lastModel,
+            voice_name: merged.voiceName,
+            web_search_enabled: merged.webSearchEnabled ?? false,
+            updated_at: new Date().toISOString()
+        };
+
+        const { data, error } = await supabase
+          .from('user_settings')
+          .upsert(payload)
+          .select()
+          .single();
+
+        if (error) {
+            logError("Save user settings error", error);
+            return { ...merged, userId: user.id };
+        }
+
+        return data ? mapSettingsRow(data) : { ...merged, userId: user.id };
+    } catch (e) {
+        logError("Save user settings failed", e);
+        return { ...merged, userId: user.id };
+    }
+  },
   
   // --- Usage Stats ---
   async getUsageStats(): Promise<UsageStats> {
@@ -211,7 +302,8 @@ export const dbService = {
                 timestamp: toTimestamp(m.timestamp),
                 type: m.type as 'text' | 'image' | 'audio',
                 groundingUrls: m.grounding_urls,
-                model: m.model
+                model: m.model,
+                fileMetadata: m.file_metadata || []
             }));
 
         return {
@@ -271,6 +363,7 @@ export const dbService = {
         timestamp: toTimestamp(message.timestamp), 
         type: message.type || 'text',
         grounding_urls: message.groundingUrls || [],
+        file_metadata: message.fileMetadata || [],
     };
     
     if (message.model) {
@@ -281,9 +374,10 @@ export const dbService = {
     if (error) logError("Add message error", error);
   },
   
-  async updateMessageContent(messageId: string, content: string, groundingUrls?: any[]): Promise<void> {
+  async updateMessageContent(messageId: string, content: string, groundingUrls?: any[], fileMetadata?: any[]): Promise<void> {
     const payload: any = { content };
     if (groundingUrls) payload.grounding_urls = groundingUrls;
+    if (fileMetadata) payload.file_metadata = fileMetadata;
     
     const { error } = await supabase.from('messages').update(payload).eq('id', messageId);
     if (error) logError("Update message error", error);

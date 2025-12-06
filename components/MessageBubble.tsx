@@ -115,10 +115,43 @@ export const MessageBubble: React.FC<MessageBubbleProps> = React.memo(({ message
             </div>
           )}
           
-          {/* Model Name Indicator */}
-          {!isUser && modelName && (
-             <div className="text-[10px] opacity-40 mt-2 text-right font-medium tracking-wide">
-               {modelName}
+          {/* Processed file metadata */}
+          {!isUser && message.fileMetadata && message.fileMetadata.length > 0 && (
+            <div className="mt-3 space-y-1 text-xs text-gray-600 dark:text-gray-200">
+              <div className="font-semibold text-gray-700 dark:text-gray-100">Files processed</div>
+              {message.fileMetadata.map((f, idx) => (
+                <div key={`${f.path || f.name}-${idx}`} className="flex flex-wrap items-center gap-2">
+                  <span className="px-2 py-1 rounded bg-gray-100 dark:bg-slate-700 border border-gray-200 dark:border-slate-600 text-[11px] font-semibold">{f.name}</span>
+                  {f.mimeType && <span className="opacity-70">{f.mimeType}</span>}
+                  {typeof f.size === 'number' && <span className="opacity-70">{(f.size / 1024).toFixed(1)} KB</span>}
+                  {f.zipEntryPath && <span className="opacity-70">entry: {f.zipEntryPath}</span>}
+                  {f.truncated && <span className="text-amber-600 dark:text-amber-300 font-semibold">truncated</span>}
+                  {f.warning && <span className="text-red-500 dark:text-red-300">⚠️ {f.warning}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!isUser && message.warnings && message.warnings.length > 0 && (
+            <div className="mt-2 text-xs text-amber-600 dark:text-amber-300 space-y-1">
+              {message.warnings.map((w, idx) => (
+                <div key={idx}>⚠️ {w}</div>
+              ))}
+            </div>
+          )}
+          
+          {/* Model Name and RAG Indicator */}
+          {!isUser && (modelName || message.usedRagContext) && (
+             <div className="flex items-center justify-end gap-2 mt-2 text-[10px] opacity-40 font-medium tracking-wide">
+               {modelName && <span>{modelName}</span>}
+               {message.usedRagContext && (
+                 <span 
+                   className="px-1.5 py-0.5 rounded bg-purple-500/20 dark:bg-purple-400/20 text-purple-700 dark:text-purple-300 opacity-100 border border-purple-500/30" 
+                   title={`Used ${message.ragContextLength || 0} chars of memory context`}
+                 >
+                   🧠 Memory
+                 </span>
+               )}
              </div>
           )}
         </div>

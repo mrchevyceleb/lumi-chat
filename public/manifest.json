@@ -1,20 +1,23 @@
 {
   "name": "Lumi Chat",
   "short_name": "Lumi",
-  "start_url": ".",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#0f172a",
   "theme_color": "#4f46e5",
   "description": "Your sharp, practical AI assistant.",
   "icons": [
     {
-      "src": "https://xcjqilfhlwbykckzdzry.supabase.co/storage/v1/object/public/images/50ad6e29-e72e-4158-b9cf-486ab30c64c5/d7a6feb7-13c3-4823-84ef-913e89786d2d.png",
+      "src": "/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "https://xcjqilfhlwbykckzdzry.supabase.co/storage/v1/object/public/images/50ad6e29-e72e-4158-b9cf-486ab30c64c5/d7a6feb7-13c3-4823-84ef-913e89786d2d.png",
+      "src": "/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

@@ -1,62 +1,78 @@
 
-const CACHE_NAME = 'lumi-chat-v5';
-const ASSETS_TO_CACHE = [
-  './',
-  './index.html',
-  'https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap'
+const CACHE_VERSION = 'v6';
+const APP_SHELL_CACHE = `lumi-chat-shell-${CACHE_VERSION}`;
+const RUNTIME_CACHE = `lumi-chat-runtime-${CACHE_VERSION}`;
+const APP_SHELL = [
+  '/',
+  '/index.html',
+  '/manifest.json',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png'
 ];
+
+const isApiRequest = (url) => (
+  url.hostname.includes('supabase.co') ||
+  url.hostname.includes('googleapis.com') ||
+  url.hostname.includes('goog') ||
+  url.pathname.includes('/rest/v1/') ||
+  url.pathname.includes('/functions/v1/') || // Edge Functions
+  url.pathname.includes('/auth/v1/') || // Auth endpoints
+  url.pathname.includes('/storage/v1/') || // Storage endpoints
+  url.pathname.includes('/realtime/') // Realtime/websocket
+);
 
 self.addEventListener('install', (event) => {
   // Force the waiting service worker to become the active service worker
   self.skipWaiting();
-  
+
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      // We try to cache what we can, but don't fail if external resources block CORS opaque responses
-      return cache.addAll(ASSETS_TO_CACHE).catch(err => console.warn('Cache addAll error (likely CORS):', err));
+    caches.open(APP_SHELL_CACHE).then((cache) => {
+      return cache.addAll(APP_SHELL).catch(err => console.warn('Cache addAll error:', err));
     })
   );
 });
 
 self.addEventListener('activate', (event) => {
-  // Take control of all clients immediately
   event.waitUntil(
-    Promise.all([
-      self.clients.claim(),
-      caches.keys().then((cacheNames) => {
-        return Promise.all(
-          cacheNames.map((cacheName) => {
-            if (cacheName !== CACHE_NAME) {
-              return caches.delete(cacheName);
-            }
-          })
-        );
-      })
-    ])
+    (async () => {
+      // Preload navigation requests where supported
+      if (self.registration.navigationPreload) {
+        try {
+          await self.registration.navigationPreload.enable();
+        } catch (err) {
+          console.warn('Navigation preload enable failed:', err);
+        }
+      }
+
+      const keys = await caches.keys();
+      await Promise.all(
+        keys.map((key) => {
+          if (![APP_SHELL_CACHE, RUNTIME_CACHE].includes(key)) {
+            return caches.delete(key);
+          }
+        })
+      );
+
+      await self.clients.claim();
+    })()
   );
 });
 
+self.addEventListener('message', (event) => {
+  if (event.data === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
+  const { request } = event;
+  if (request.method !== 'GET') return;
 
-  // CRITICAL FIX: Explicitly pass through API calls to the network.
-  // Using return; without respondWith() can cause failures on mobile browsers and PWAs.
-  // We must explicitly call respondWith(fetch()) for these requests.
-  const isApiCall = (
-    url.hostname.includes('supabase.co') || 
-    url.hostname.includes('googleapis.com') || 
-    url.hostname.includes('goog') ||
-    url.pathname.includes('/rest/v1/') ||
-    url.pathname.includes('/functions/v1/') || // Edge Functions
-    url.pathname.includes('/auth/v1/') || // Auth endpoints
-    url.pathname.includes('/storage/v1/') || // Storage endpoints
-    url.pathname.includes('/realtime/') // Realtime/websocket
-  );
+  const url = new URL(request.url);
 
-  if (isApiCall) {
-    // Explicitly pass through to network - this works correctly on all browsers
+  if (isApiRequest(url)) {
     event.respondWith(
-      fetch(event.request).catch(err => {
+      fetch(request).catch(err => {
         console.error('API fetch failed:', err);
         return new Response(JSON.stringify({ error: 'Network request failed' }), {
           status: 503,
@@ -67,33 +83,80 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // STRATEGY: Stale-While-Revalidate for HTML (Navigation)
-  if (event.request.mode === 'navigate') {
-    event.respondWith(
-      caches.match('./index.html').then((cachedResponse) => {
-        const fetchPromise = fetch(event.request).then((networkResponse) => {
-          return caches.open(CACHE_NAME).then((cache) => {
-            cache.put('./index.html', networkResponse.clone());
-            return networkResponse;
-          });
-        }).catch(() => cachedResponse); // Fallback to cache on network failure
-        
-        // Return cached response immediately if available, otherwise wait for network
-        return cachedResponse || fetchPromise;
-      })
-    );
+  // Navigation requests: network-first with offline fallback
+  if (request.mode === 'navigate') {
+    event.respondWith(handleNavigationRequest(event));
     return;
   }
 
-  // STRATEGY: Cache-First for Assets (Images, Fonts, Scripts)
-  event.respondWith(
-    caches.match(event.request).then((response) => {
-      return response || fetch(event.request).catch(() => {
-        // Return a fallback for images if offline
-        if (event.request.destination === 'image') {
-          return new Response('', { status: 404 });
-        }
-      });
-    })
-  );
+  // Only handle same-origin assets below
+  if (url.origin !== self.location.origin) return;
+
+  // Cache-first for built assets/icons
+  if (
+    url.pathname.startsWith('/assets/') ||
+    url.pathname.startsWith('/icons/') ||
+    url.pathname.endsWith('.js') ||
+    url.pathname.endsWith('.css')
+  ) {
+    event.respondWith(cacheFirst(request));
+    return;
+  }
+
+  // Stale-while-revalidate for other GET requests (e.g., images)
+  event.respondWith(staleWhileRevalidate(request));
 });
+
+async function handleNavigationRequest(event) {
+  const cache = await caches.open(APP_SHELL_CACHE);
+
+  // Use any preloaded response first
+  try {
+    const preload = await event.preloadResponse;
+    if (preload) {
+      cache.put('/index.html', preload.clone());
+      return preload;
+    }
+  } catch (err) {
+    console.warn('Navigation preload failed:', err);
+  }
+
+  // Network first with offline fallback
+  try {
+    const response = await fetch(event.request);
+    cache.put('/index.html', response.clone());
+    return response;
+  } catch (err) {
+    const cached = await cache.match('/index.html');
+    if (cached) return cached;
+    return new Response('Offline', { status: 503, headers: { 'Content-Type': 'text/plain' } });
+  }
+}
+
+async function cacheFirst(request) {
+  const cache = await caches.open(RUNTIME_CACHE);
+  const cached = await cache.match(request);
+  if (cached) return cached;
+
+  try {
+    const response = await fetch(request);
+    cache.put(request, response.clone());
+    return response;
+  } catch (error) {
+    return cached || Promise.reject(error);
+  }
+}
+
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(RUNTIME_CACHE);
+  const cached = await cache.match(request);
+
+  const networkFetch = fetch(request)
+    .then((response) => {
+      cache.put(request, response.clone());
+      return response;
+    })
+    .catch(() => cached);
+
+  return cached || networkFetch;
+}

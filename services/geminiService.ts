@@ -1,5 +1,5 @@
 import { supabase } from './supabaseClient';
-import { Message, Persona, ModelId } from "../types";
+import { Message, Persona, ModelId, ProcessedFileInfo } from "../types";
 
 export class InvalidApiKeyError extends Error {
   constructor(message: string = "Invalid API Key") {
@@ -12,6 +12,8 @@ export interface GenerateResponse {
   text: string;
   groundingUrls?: Array<{ title: string; uri: string }>;
   usage?: { input: number; output: number };
+  processedFiles?: ProcessedFileInfo[];
+  warnings?: string[];
 }
 
 export const generateChatTitle = async (userMessage: string): Promise<string | null> => {
@@ -62,6 +64,7 @@ const MODEL_CONTEXT_CONFIGS: Record<string, { maxMessages: number; maxContextCha
   'o1': { maxMessages: 10, maxContextChars: 16000, minRecentMessages: 4 },
   'o1-mini': { maxMessages: 12, maxContextChars: 20000, minRecentMessages: 4 },
   'gemini-3-pro-preview': { maxMessages: 14, maxContextChars: 24000, minRecentMessages: 6 },
+  'gemini-3.0-pro': { maxMessages: 14, maxContextChars: 24000, minRecentMessages: 6 }, // alias for compatibility
   'gpt-5.1': { maxMessages: 16, maxContextChars: 28000, minRecentMessages: 6 },
   // Standard models - balanced context
   'gpt-5-mini': { maxMessages: 20, maxContextChars: 32000, minRecentMessages: 6 },
@@ -133,14 +136,15 @@ function getContextWindow(messages: Message[], modelId: string): Message[] {
 export const streamChatResponse = async (
   messages: Message[],
   persona: Persona,
-  files: { mimeType: string; data: string }[],
+  files: { mimeType: string; data?: string; path?: string; bucket?: string; name?: string; size?: number }[],
   textContexts: string[],
   useSearch: boolean,
   responseLength: 'concise' | 'detailed',
   modelId: ModelId,
   onChunk: (text: string) => void,
   signal?: AbortSignal,
-  ragContext?: string
+  ragContext?: string,
+  chatId?: string
 ): Promise<GenerateResponse> => {
 
   let systemInstruction = persona.systemInstruction;
@@ -168,12 +172,21 @@ export const streamChatResponse = async (
     useSearch,
     files: files.filter(f => !f.hasOwnProperty('isTextContext')),
     textContexts,
-    ragContext
+    ragContext,
+    chatId
   };
 
   let finalResponseText = '';
   let groundingUrls: Array<{ title: string; uri: string }> = [];
   let usage = { input: 0, output: 0 };
+  let processedFiles: ProcessedFileInfo[] = [];
+  let warnings: string[] = [];
+
+  const { data: sessionData } = await supabase.auth.getSession();
+  const authToken = sessionData.session?.access_token;
+  const authHeader = authToken
+    ? `Bearer ${authToken}`
+    : `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im13d29haGx5Z3p2aWV0bWhrbHZ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwNzc2NTUsImV4cCI6MjA3OTY1MzY1NX0.1UoXU-WHslXQQngaeRlE63Ef__o4cNFeV6K3dE_wj2w'}`;
 
   try {
     // Call the edge function
@@ -184,7 +197,7 @@ export const streamChatResponse = async (
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'text/event-stream',
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im13d29haGx5Z3p2aWV0bWhrbHZ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwNzc2NTUsImV4cCI6MjA3OTY1MzY1NX0.1UoXU-WHslXQQngaeRlE63Ef__o4cNFeV6K3dE_wj2w'}`,
+          'Authorization': authHeader,
         },
         body: JSON.stringify(requestBody),
         signal,
@@ -232,6 +245,8 @@ export const streamChatResponse = async (
               finalResponseText = data.text;
               groundingUrls = data.groundingUrls || [];
               usage = data.usage || { input: 0, output: 0 };
+              processedFiles = data.processedFiles || [];
+              warnings = data.warnings || [];
               onChunk(finalResponseText);
             } else if (data.type === 'error') {
               throw new Error(data.error);
@@ -251,13 +266,13 @@ export const streamChatResponse = async (
 
     if (error.name === 'AbortError') {
       // Request was aborted, that's fine
-      return { text: finalResponseText, groundingUrls, usage };
+      return { text: finalResponseText, groundingUrls, usage, processedFiles, warnings };
     }
 
     const errorMessage = "I'm having trouble connecting right now. Please try again.";
     if (!signal?.aborted) {
       onChunk(errorMessage);
-      return { text: errorMessage, groundingUrls: [], usage };
+      return { text: errorMessage, groundingUrls: [], usage, processedFiles, warnings };
     }
   }
 
@@ -265,8 +280,8 @@ export const streamChatResponse = async (
   if (!finalResponseText && !signal?.aborted) {
     const fallbackText = "I received your message, but couldn't generate a response. Please try rephrasing.";
     onChunk(fallbackText);
-    return { text: fallbackText, groundingUrls: [], usage };
+    return { text: fallbackText, groundingUrls: [], usage, processedFiles, warnings };
   }
 
-  return { text: finalResponseText, groundingUrls, usage };
+  return { text: finalResponseText, groundingUrls, usage, processedFiles, warnings };
 };

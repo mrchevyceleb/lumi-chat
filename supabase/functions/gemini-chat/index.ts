@@ -3,6 +3,8 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { GoogleGenerativeAI } from "https://esm.sh/@google/generative-ai@0.21.0";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { parseIncomingFile, ParsedFile, normalizeMimeType } from "../_shared/file_parsing.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,6 +13,23 @@ const corsHeaders = {
   "Access-Control-Expose-Headers": "Content-Type, Cache-Control, Connection",
   "Access-Control-Max-Age": "86400",
 };
+
+type ProcessedFileInfo = {
+  name: string;
+  mimeType?: string;
+  size?: number;
+  bucket?: string;
+  path?: string;
+  kind?: string;
+  zipEntryPath?: string;
+  truncated?: boolean;
+  warning?: string;
+};
+
+const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+const DEFAULT_BUCKET = "uploads";
 
 // Check if the model is an OpenAI model (GPT or o1)
 function isOpenAIModel(modelId: string): boolean {
@@ -22,7 +41,8 @@ function mapModelId(modelId: string): string {
   const modelMap: Record<string, string> = {
     // Gemini models - map to actual Google API model names
     "gemini-2.5-flash": "gemini-2.5-flash-preview-05-20",
-    "gemini-3-pro-preview": "gemini-2.5-pro-preview-06-05",
+    "gemini-3-pro-preview": "gemini-3-pro-preview",
+    "gemini-3.0-pro": "gemini-3-pro-preview", // alias to correct preview model
     "gemini-flash-lite-latest": "gemini-2.0-flash-lite",
     // OpenAI GPT-5 models - use exact API names
     "gpt-5.1": "gpt-5.1",
@@ -42,15 +62,142 @@ function mapModelId(modelId: string): string {
   return modelId;
 }
 
+function formatContextBlock(file: ParsedFile, parentName?: string): string {
+  const origin = file.zipEntryPath && parentName
+    ? `${parentName} -> ${file.zipEntryPath}`
+    : file.zipEntryPath
+      ? file.zipEntryPath
+      : file.name;
+
+  const meta: string[] = [];
+  if (file.mimeType) meta.push(`Type: ${file.mimeType}`);
+  if (file.size) meta.push(`Size: ${file.size} bytes`);
+  if (file.truncated) meta.push("Note: truncated for length");
+  if (file.warning) meta.push(`Warning: ${file.warning}`);
+
+  const metaBlock = meta.length > 0 ? `${meta.join(" | ")}\n` : "";
+  const textBlock = file.text ? file.text : "";
+  return `FILE: ${origin}\n${metaBlock}${textBlock}`;
+}
+
+async function downloadFromStorage(path: string, bucket: string): Promise<Uint8Array> {
+  const { data, error } = await supabase.storage.from(bucket).download(path);
+  if (error || !data) {
+    throw new Error(`Failed to download ${path} from ${bucket}: ${error?.message || "unknown error"}`);
+  }
+  const buf = await data.arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+async function getUserIdFromRequest(req: Request): Promise<string | null> {
+  const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
+  const token = authHeader.replace("Bearer ", "");
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user) return null;
+  return data.user.id;
+}
+
+async function saveFileMetadataRows(userId: string | null, chatId: string | null, files: ProcessedFileInfo[]) {
+  if (!userId) return;
+  const rows = files
+    .filter((f) => f.path && f.bucket)
+    .map((f) => ({
+      user_id: userId,
+      chat_id: chatId,
+      bucket: f.bucket,
+      path: f.path,
+      zip_entry_path: f.zipEntryPath ?? null,
+      original_name: f.name,
+      extension: f.name.includes(".") ? f.name.split(".").pop() : null,
+      mime_type: f.mimeType,
+      size_bytes: f.size ?? null,
+    }));
+
+  if (rows.length === 0) return;
+
+  const { error } = await supabase.from("file_metadata").insert(rows);
+  if (error) {
+    console.error("File metadata insert failed", error.message);
+  }
+}
+
+async function processIncomingFiles(
+  files: any[] | undefined,
+  userId: string | null,
+  chatId: string | null
+): Promise<{
+  processedFiles: ProcessedFileInfo[];
+  contextBlocks: string[];
+  inlineMedia: any[];
+  warnings: string[];
+}> {
+  const processedFiles: ProcessedFileInfo[] = [];
+  const contextBlocks: string[] = [];
+  const inlineMedia: any[] = [];
+  const warnings: string[] = [];
+
+  for (const file of files || []) {
+    const bucket = file.bucket || DEFAULT_BUCKET;
+    const incomingMime = normalizeMimeType(file);
+    const incoming = { ...file, bucket, mimeType: incomingMime };
+
+    try {
+      const parsed = await parseIncomingFile(incoming, downloadFromStorage);
+
+      parsed.forEach((p) => {
+        const info: ProcessedFileInfo = {
+          name: p.name,
+          mimeType: p.mimeType,
+          size: p.size ?? file.size,
+          bucket: p.bucket || bucket,
+          path: p.path || file.path,
+          kind: p.kind,
+          zipEntryPath: p.zipEntryPath,
+          truncated: p.truncated,
+          warning: p.warning,
+        };
+        processedFiles.push(info);
+        if (p.warning) {
+          warnings.push(`${p.name}: ${p.warning}`);
+        }
+        if (p.kind === "image" && file.data) {
+          inlineMedia.push({ mimeType: p.mimeType, data: file.data });
+        }
+        if (p.text) {
+          contextBlocks.push(formatContextBlock({ ...p, text: p.text }, file.name));
+        }
+      });
+    } catch (err: any) {
+      const warning = `Failed to process ${file.name || "file"}: ${err?.message || err}`;
+      console.error(warning);
+      warnings.push(warning);
+      processedFiles.push({
+        name: file.name || "file",
+        mimeType: incomingMime,
+        bucket,
+        path: file.path,
+        kind: "other",
+        warning,
+      });
+    }
+  }
+
+  await saveFileMetadataRows(userId, chatId, processedFiles);
+
+  return { processedFiles, contextBlocks, inlineMedia, warnings };
+}
+
 // Handle OpenAI streaming response
 async function handleOpenAI(
   messages: any[],
   systemInstruction: string,
   modelId: string,
-  files: any[],
+  mediaFiles: any[],
   textContexts: string[],
   ragContext: string,
-  useSearch: boolean
+  useSearch: boolean,
+  meta: { processedFiles: ProcessedFileInfo[]; warnings: string[] }
 ): Promise<Response> {
   const openaiApiKey = Deno.env.get("OPENAI_API_KEY");
   if (!openaiApiKey) {
@@ -89,8 +236,8 @@ async function handleOpenAI(
   }
 
   // Add images (OpenAI Responses API format)
-  if (files && files.length > 0) {
-    files.forEach((file: { mimeType: string; data: string }) => {
+  if (mediaFiles && mediaFiles.length > 0) {
+    mediaFiles.forEach((file: { mimeType: string; data: string }) => {
       contentParts.push({
         type: "input_image",
         image_url: `data:${file.mimeType};base64,${file.data}`,
@@ -205,6 +352,8 @@ INSTRUCTIONS: Use the memory above to provide a personalized response. If the us
                 text: fullText,
                 groundingUrls: [],
                 usage,
+                processedFiles: meta.processedFiles,
+                warnings: meta.warnings,
               })}\n\n`
             )
           );
@@ -312,6 +461,8 @@ INSTRUCTIONS: Use the memory above to provide a personalized response. If the us
               text: fullText,
               groundingUrls: [],
               usage,
+              processedFiles: meta.processedFiles,
+              warnings: meta.warnings,
             })}\n\n`
           )
         );
@@ -342,10 +493,11 @@ async function handleGemini(
   messages: any[],
   systemInstruction: string,
   modelId: string,
-  files: any[],
+  mediaFiles: any[],
   textContexts: string[],
   ragContext: string,
-  useSearch: boolean
+  useSearch: boolean,
+  meta: { processedFiles: ProcessedFileInfo[]; warnings: string[] }
 ): Promise<Response> {
   const apiKey = Deno.env.get("GOOGLE_API_KEY");
   if (!apiKey) {
@@ -393,8 +545,8 @@ async function handleGemini(
   }
 
   // Add image files
-  if (files && files.length > 0) {
-    files.forEach((file: { mimeType: string; data: string }) => {
+  if (mediaFiles && mediaFiles.length > 0) {
+    mediaFiles.forEach((file: { mimeType: string; data: string }) => {
       parts.push({
         inlineData: {
           mimeType: file.mimeType,
@@ -468,6 +620,8 @@ INSTRUCTIONS: Use the memory above to provide a personalized response. If the us
               text: fullText,
               groundingUrls,
               usage,
+              processedFiles: meta.processedFiles,
+              warnings: meta.warnings,
             })}\n\n`
           )
         );
@@ -507,6 +661,7 @@ serve(async (req) => {
   }
 
   try {
+    const body = await req.json();
     const {
       messages,
       systemInstruction,
@@ -515,7 +670,17 @@ serve(async (req) => {
       files,
       textContexts,
       ragContext,
-    } = await req.json();
+      chatId = null,
+    } = body;
+
+    const userId = await getUserIdFromRequest(req);
+    const { processedFiles, contextBlocks, inlineMedia, warnings } = await processIncomingFiles(
+      files,
+      userId,
+      chatId
+    );
+
+    const mergedTextContexts = [...(textContexts || []), ...contextBlocks];
 
     // Route to appropriate handler based on model
     if (isOpenAIModel(modelId)) {
@@ -523,20 +688,22 @@ serve(async (req) => {
         messages,
         systemInstruction,
         modelId,
-        files,
-        textContexts,
+        inlineMedia,
+        mergedTextContexts,
         ragContext,
-        useSearch
+        useSearch,
+        { processedFiles, warnings }
       );
     } else {
       return await handleGemini(
         messages,
         systemInstruction,
         modelId,
-        files,
-        textContexts,
+        inlineMedia,
+        mergedTextContexts,
         ragContext,
-        useSearch
+        useSearch,
+        { processedFiles, warnings }
       );
     }
   } catch (error: any) {

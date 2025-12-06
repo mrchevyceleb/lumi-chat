@@ -6,7 +6,7 @@ import { Sidebar } from './components/Sidebar';
 import { MessageBubble } from './components/MessageBubble';
 import { ChatInput } from './components/ChatInput'; // New Import
 import { streamChatResponse, generateChatTitle, InvalidApiKeyError } from './services/geminiService';
-import { ChatSession, Folder, Message, Persona, DEFAULT_PERSONA, CODING_PERSONA, ModelId, AVAILABLE_MODELS } from './types';
+import { ChatSession, Folder, Message, Persona, DEFAULT_PERSONA, CODING_PERSONA, ModelId, AVAILABLE_MODELS, UserSettings, FileAttachment, ProcessedFileInfo } from './types';
 import { LiveSessionOverlay } from './components/LiveSessionOverlay';
 import { supabase } from './services/supabaseClient';
 import { dbService, UsageStats } from './services/dbService';
@@ -66,16 +66,57 @@ const App: React.FC = () => {
     return saved === 'true';
   });
 
-  // Voice State (Settings)
+  // Voice & Model State (Settings)
+  const initialDefaultModel = (() => {
+    const saved = localStorage.getItem('lumi_default_model');
+    return (saved && AVAILABLE_MODELS.some(m => m.id === saved)) ? (saved as ModelId) : AVAILABLE_MODELS[0].id;
+  })();
+
   const [voiceName, setVoiceName] = useState(() => {
     return localStorage.getItem('lumi_voice_name') || 'Kore';
   });
 
-  // Default Model State (Settings)
-  const [defaultModel, setDefaultModel] = useState<ModelId>(() => {
-    const saved = localStorage.getItem('lumi_default_model');
-    return (saved && AVAILABLE_MODELS.some(m => m.id === saved)) ? saved as ModelId : AVAILABLE_MODELS[0].id;
+  const [defaultModel, setDefaultModel] = useState<ModelId>(initialDefaultModel);
+
+  const [selectedModel, setSelectedModel] = useState<ModelId>(() => {
+    const saved = localStorage.getItem('lumi_last_model');
+    if (saved && AVAILABLE_MODELS.some(m => m.id === saved)) return saved as ModelId;
+    return initialDefaultModel;
   });
+
+  const [useSearch, setUseSearch] = useState<boolean>(() => {
+    const saved = localStorage.getItem('lumi_use_search');
+    return saved === 'true';
+  });
+
+  const applyFetchedSettings = (settings: UserSettings) => {
+    const modelFromSettings = settings.defaultModel && AVAILABLE_MODELS.some(m => m.id === settings.defaultModel)
+      ? settings.defaultModel
+      : AVAILABLE_MODELS[0].id;
+    const lastModelFromSettings = settings.lastModel && AVAILABLE_MODELS.some(m => m.id === settings.lastModel)
+      ? settings.lastModel
+      : modelFromSettings;
+
+    setDefaultModel(modelFromSettings);
+    setSelectedModel(lastModelFromSettings);
+    if (settings.voiceName) setVoiceName(settings.voiceName);
+    if (settings.webSearchEnabled !== undefined) setUseSearch(!!settings.webSearchEnabled);
+  };
+
+  const persistUserSettings = async (changes: Partial<UserSettings>) => {
+    const payload: Partial<UserSettings> = {
+      defaultModel,
+      lastModel: selectedModel,
+      voiceName,
+      webSearchEnabled: useSearch,
+      ...changes,
+    };
+    try {
+      await dbService.saveUserSettings(payload);
+    } catch (e) {
+      console.error("Failed to persist user settings", e);
+    }
+  };
 
   // Token Usage State
   const [usageStats, setUsageStats] = useState<UsageStats>({ 
@@ -91,6 +132,14 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('lumi_default_model', defaultModel);
   }, [defaultModel]);
+
+  useEffect(() => {
+    localStorage.setItem('lumi_last_model', selectedModel);
+  }, [selectedModel]);
+
+  useEffect(() => {
+    localStorage.setItem('lumi_use_search', String(useSearch));
+  }, [useSearch]);
 
   // Persist Active Chat ID
   useEffect(() => {
@@ -225,11 +274,12 @@ const App: React.FC = () => {
     if (chats.length === 0) setIsLoadingData(true);
     
     try {
-        const [fetchedFolders, fetchedPersonas, fetchedChats, fetchedUsage] = await Promise.all([
+        const [fetchedFolders, fetchedPersonas, fetchedChats, fetchedUsage, fetchedSettings] = await Promise.all([
             dbService.getFolders(),
             dbService.getPersonas(),
             dbService.getChats(),
-            dbService.getUsageStats()
+            dbService.getUsageStats(),
+            dbService.getUserSettings()
         ]);
         
         // Update state with fetched data (reconciliation/overwrite)
@@ -238,11 +288,35 @@ const App: React.FC = () => {
         setPersonas(allPersonas);
         setChats(fetchedChats);
         setUsageStats(fetchedUsage);
+        if (fetchedSettings) {
+          applyFetchedSettings(fetchedSettings);
+        }
     } catch (error) {
         console.error("Failed to load data", error);
     } finally {
         setIsLoadingData(false);
     }
+  };
+
+  const handleVoiceChange = async (name: string) => {
+    setVoiceName(name);
+    persistUserSettings({ voiceName: name });
+  };
+
+  const handleDefaultModelChange = async (modelId: ModelId) => {
+    setDefaultModel(modelId);
+    setSelectedModel(modelId);
+    persistUserSettings({ defaultModel: modelId, lastModel: modelId });
+  };
+
+  const handleModelChange = async (modelId: ModelId) => {
+    setSelectedModel(modelId);
+    persistUserSettings({ lastModel: modelId });
+  };
+
+  const handleToggleSearch = async (value: boolean) => {
+    setUseSearch(value);
+    persistUserSettings({ webSearchEnabled: value });
   };
 
   const handleSignOut = async () => {
@@ -251,6 +325,10 @@ const App: React.FC = () => {
     // Clear cache
     localStorage.removeItem('lumi_chats_cache');
     localStorage.removeItem('lumi_folders_cache');
+    setVoiceName('Kore');
+    setDefaultModel(initialDefaultModel);
+    setSelectedModel(initialDefaultModel);
+    setUseSearch(false);
   };
 
   useEffect(() => {
@@ -560,7 +638,7 @@ const App: React.FC = () => {
   };
 
   // --- NEW: Handle Send Message (Receives data from ChatInput) ---
-  const handleSendMessage = async (text: string, files: any[], useSearch: boolean, responseLength: 'concise' | 'detailed', isVoiceActive: boolean, modelId: ModelId, personaId: string) => {
+  const handleSendMessage = async (text: string, files: FileAttachment[], useSearch: boolean, responseLength: 'concise' | 'detailed', isVoiceActive: boolean, modelId: ModelId, personaId: string) => {
     
     // Ensure we have a chat
     let chatId = activeChatId;
@@ -595,7 +673,7 @@ const App: React.FC = () => {
     const shouldGenerateTitle = isNewChat || (chatBeforeUpdate && chatBeforeUpdate.messages.length === 0);
 
     const imageAttachments = files
-      .filter(f => f.mimeType.startsWith('image/'))
+      .filter(f => f.mimeType?.startsWith('image/') && f.data)
       .map(f => `data:${f.mimeType};base64,${f.data}`);
       
     const hasImages = imageAttachments.length > 0;
@@ -670,7 +748,20 @@ const App: React.FC = () => {
        }
        
        const conversationLength = updatedChat?.messages.length || 0;
+       console.log("📝 App: Requesting RAG context...", {
+         chatId,
+         conversationLength,
+         hasConversationSummary: !!conversationSummary,
+         messagePreview: text.slice(0, 50)
+       });
+       
        ragContext = await ragService.getRagContext(text, chatId!, conversationSummary, conversationLength);
+       
+       console.log("📝 App: RAG context retrieved:", {
+         hasContext: !!ragContext,
+         contextLength: ragContext.length,
+         contextPreview: ragContext.slice(0, 150)
+       });
     }
 
     // 2. Title Gen - use AI-only title (no persona prefix)
@@ -684,8 +775,10 @@ const App: React.FC = () => {
       });
     }
 
-    const filesToSend = files.filter(f => !f.isTextContext).map(f => ({ mimeType: f.mimeType, data: f.data }));
-    const textContexts = files.filter(f => f.isTextContext).map(f => f.data);
+    const filesToSend = files.filter(f => !f.isTextContext);
+    const textContexts = files
+      .filter(f => f.isTextContext && typeof f.data === 'string')
+      .map(f => f.data as string);
     
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -719,7 +812,9 @@ const App: React.FC = () => {
           role: 'model', 
           content: '', 
           timestamp: aiMessageTimestamp,
-          model: modelId
+          model: modelId,
+          usedRagContext: !!ragContext,
+          ragContextLength: ragContext.length
       });
 
       // Step B & C: Call Gemini with Context
@@ -745,8 +840,12 @@ const App: React.FC = () => {
           }));
         },
         controller.signal,
-        ragContext // Pass RAG context here
+        ragContext, // Pass RAG context here
+        chatId
       );
+
+      const finalFileMetadata = response.processedFiles || [];
+      const finalWarnings = response.warnings || [];
 
       setChats(prev => prev.map(c => {
         if (c.id === chatId) {
@@ -756,7 +855,11 @@ const App: React.FC = () => {
             msgs[msgIndex] = { 
               ...msgs[msgIndex], 
               content: response.text,
-              groundingUrls: response.groundingUrls 
+              groundingUrls: response.groundingUrls,
+              fileMetadata: finalFileMetadata,
+              warnings: finalWarnings,
+              usedRagContext: !!ragContext,
+              ragContextLength: ragContext.length
             };
           }
           return { ...c, messages: msgs };
@@ -783,7 +886,7 @@ const App: React.FC = () => {
          dbService.updateUsageStats(newInput, newOutput, modelId);
       }
 
-      await dbService.updateMessageContent(aiMessageId, response.text, response.groundingUrls);
+      await dbService.updateMessageContent(aiMessageId, response.text, response.groundingUrls, finalFileMetadata);
 
       // Step 2: Save Memory to Supabase Vector Store
       if (session?.user?.id && response.text) {
@@ -966,10 +1069,10 @@ const App: React.FC = () => {
         toggleDarkMode={() => setDarkMode(!darkMode)}
         userEmail={session.user.email}
         voiceName={voiceName}
-        setVoiceName={setVoiceName}
+        setVoiceName={handleVoiceChange}
         usageStats={usageStats}
         defaultModel={defaultModel}
-        setDefaultModel={setDefaultModel}
+        setDefaultModel={handleDefaultModelChange}
       />
 
       <VaultModal 
@@ -1099,7 +1202,10 @@ const App: React.FC = () => {
           onCreatePersona={startCreatingPersona}
           onEditPersona={startEditingPersona}
           onDeletePersona={handleDeletePersona}
-          defaultModel={defaultModel}
+        selectedModel={selectedModel}
+        onModelChange={handleModelChange}
+        useSearch={useSearch}
+        onToggleSearch={handleToggleSearch}
         />
 
       </div>

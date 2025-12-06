@@ -18,3 +18,12 @@ View your app in AI Studio: https://ai.studio/apps/drive/1-jLqQ7JH6ko1tO7UR8ol9u
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## PDF / ZIP handling
+
+- Attachments now support images, PDF, ZIP (per-file), and small text files/snippets.
+- Files are uploaded to the private Supabase Storage bucket `uploads`; only minimal metadata is stored (no file contents) in `public.file_metadata` and `messages.file_metadata`.
+- Max upload size is 25MB per file. Unsupported items inside ZIPs are skipped with warnings.
+- Apply the new schema before use: `supabase db push`
+- Deploy the updated Edge Function: `supabase functions deploy gemini-chat`
+- Required env/secrets for the Edge Function: `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_URL`, and model provider keys (`GOOGLE_API_KEY`, `OPENAI_API_KEY`) available to the function runtime.
