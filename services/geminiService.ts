@@ -47,13 +47,34 @@ export const previewVoice = async (voiceName: string): Promise<string | null> =>
 
     if (error) {
       console.error("Voice preview error:", error);
-      return null;
+      
+      // Try to parse the response body if available in the error context
+      // Supabase functions error usually contains the response body in the error message or context
+      if (error instanceof Error) {
+         throw error;
+      }
+      throw new Error("Voice preview failed");
     }
 
-    return data?.audioData || null; // Returns base64 string
-  } catch (e) {
+    if (!data?.audioData) {
+      console.error("Voice preview error: No audio data in response", data);
+      throw new Error("No audio data received from server");
+    }
+
+    return data.audioData; // Returns base64 string
+  } catch (e: any) {
     console.error("Voice preview failed", e);
-    return null;
+    
+    // Extract the actual error message if it's wrapped
+    let message = e.message;
+    if (e.context && e.context.json) {
+        try {
+            const body = await e.context.json();
+            if (body.error) message = body.error;
+        } catch (jsonErr) {}
+    }
+    
+    throw new Error(message);
   }
 };
 

@@ -22,6 +22,8 @@ export interface ChatSession {
   messages: Message[];
   personaId: string;
   lastUpdated: number;
+  modelId?: ModelId; // Conversation-specific model selection
+  useSearch?: boolean; // Conversation-specific web search toggle
 }
 
 export interface Folder {

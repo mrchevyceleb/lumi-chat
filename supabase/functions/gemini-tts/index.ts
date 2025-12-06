@@ -22,53 +22,53 @@ serve(async (req) => {
       throw new Error("Missing text or voiceName");
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: text }
-            ]
-          }
-        ],
-        generationConfig: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: voiceName
+    // Use the dedicated TTS model (gemini-2.5-flash-preview-tts)
+    // Reference: https://ai.google.dev/gemini-api/docs/speech-generation#supported-models
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `Say cheerfully: ${text}`
+            }]
+          }],
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: voiceName
+                }
               }
             }
           }
-        }
-      }),
-    });
+        })
+      }
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("Gemini API Error:", errorText);
-      throw new Error(`Gemini API Error: ${response.statusText} - ${errorText}`);
+      console.error("Gemini TTS API error:", response.status, errorText);
+      throw new Error(`Gemini TTS API error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
     
-    // Extract audio data from the response
-    // Expected format: candidates[0].content.parts[0].inlineData.data (base64)
+    // Extract audio data from response
     const audioData = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
 
     if (!audioData) {
-      console.error("Unexpected response structure:", JSON.stringify(data));
-      throw new Error("No audio data received from Gemini");
+      console.error("No audio data in response:", JSON.stringify(data));
+      throw new Error("Model did not return audio data");
     }
 
     return new Response(
-      JSON.stringify({ audioData }),
+      JSON.stringify({ audioData: audioData }),
       { 
         headers: { ...corsHeaders, "Content-Type": "application/json" },
         status: 200 
@@ -76,8 +76,12 @@ serve(async (req) => {
     );
 
   } catch (error: any) {
+    console.error("TTS Error:", error);
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ 
+        error: error.message,
+        details: error.toString()
+      }),
       { 
         headers: { ...corsHeaders, "Content-Type": "application/json" },
         status: 500
@@ -85,6 +89,3 @@ serve(async (req) => {
     );
   }
 });
-
-
-

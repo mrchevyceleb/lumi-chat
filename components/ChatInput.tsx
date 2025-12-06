@@ -43,10 +43,10 @@ interface ChatInputProps {
   onCreatePersona: () => void;
   onEditPersona: (persona: Persona) => void;
   onDeletePersona: (personaId: string) => void;
-  selectedModel: ModelId;
-  onModelChange: (modelId: ModelId) => void;
-  useSearch: boolean;
-  onToggleSearch: (value: boolean) => void;
+  defaultModel: ModelId;
+  activeChatModelId?: ModelId; // Conversation-specific model
+  activeChatUseSearch?: boolean; // Conversation-specific web search
+  onSaveChatSettings?: (modelId: ModelId, useSearch: boolean) => void; // Callback to save settings
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({ 
@@ -59,15 +59,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onCreatePersona,
   onEditPersona,
   onDeletePersona,
-  selectedModel,
-  onModelChange,
-  useSearch,
-  onToggleSearch
+  defaultModel,
+  activeChatModelId,
+  activeChatUseSearch,
+  onSaveChatSettings
 }) => {
   const [input, setInput] = useState('');
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
   const [responseLength, setResponseLength] = useState<'concise' | 'detailed'>('detailed');
   const [isListening, setIsListening] = useState(false);
+  // Use conversation-specific model if available, otherwise default model
+  const [selectedModel, setSelectedModel] = useState<ModelId>(activeChatModelId || defaultModel || AVAILABLE_MODELS[0].id);
+  const [useSearch, setUseSearch] = useState<boolean>(activeChatUseSearch ?? false);
   
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showPersonaMenu, setShowPersonaMenu] = useState(false);
@@ -83,6 +86,36 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const personaMenuRef = useRef<HTMLDivElement>(null);
   const mobileOptionsRef = useRef<HTMLDivElement>(null); // NEW: Ref for mobile menu
+
+  // Sync selected model with conversation-specific or default model when they change
+  useEffect(() => {
+    const modelToUse = activeChatModelId || defaultModel;
+    if (modelToUse && AVAILABLE_MODELS.some(m => m.id === modelToUse)) {
+      setSelectedModel(modelToUse);
+    }
+  }, [activeChatModelId, defaultModel]);
+
+  // Sync useSearch with conversation-specific setting when it changes
+  useEffect(() => {
+    if (activeChatUseSearch !== undefined) {
+      setUseSearch(activeChatUseSearch);
+    }
+  }, [activeChatUseSearch]);
+
+  // Helper functions to handle model and search changes with persistence
+  const handleModelChange = (modelId: ModelId) => {
+    setSelectedModel(modelId);
+    if (onSaveChatSettings) {
+      onSaveChatSettings(modelId, useSearch);
+    }
+  };
+
+  const handleSearchToggle = (newValue: boolean) => {
+    setUseSearch(newValue);
+    if (onSaveChatSettings) {
+      onSaveChatSettings(selectedModel, newValue);
+    }
+  };
 
   // --- Close menus on click outside
   useEffect(() => {
@@ -350,16 +383,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                            <div>
                              <div className="text-xs font-bold text-gray-400 uppercase mb-1">Model</div>
                              <div className="space-y-1">
-                              {AVAILABLE_MODELS.map(model => (
-                                <button
-                                  key={model.id}
-                                  onClick={() => { onModelChange(model.id); setShowMobileOptions(false); }}
-                                  className={`w-full text-left px-2 py-1.5 rounded-lg text-xs transition-colors flex items-center justify-between ${selectedModel === model.id ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
-                                >
-                                  <span>{model.name}</span>
-                                  {selectedModel === model.id && <span>✓</span>}
-                                </button>
-                              ))}
+                               {AVAILABLE_MODELS.map(model => (
+                                 <button
+                                   key={model.id}
+                                   onClick={() => { handleModelChange(model.id); setShowMobileOptions(false); }}
+                                   className={`w-full text-left px-2 py-1.5 rounded-lg text-xs transition-colors flex items-center justify-between ${selectedModel === model.id ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
+                                 >
+                                   <span>{model.name}</span>
+                                   {selectedModel === model.id && <span>✓</span>}
+                                 </button>
+                               ))}
                              </div>
                            </div>
 
@@ -386,10 +419,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                            <div>
                              <div className="text-xs font-bold text-gray-400 uppercase mb-1">Tools</div>
                              <div className="flex flex-col gap-1">
-                              <button 
-                                onClick={() => { onToggleSearch(!useSearch); setShowMobileOptions(false); }}
-                                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${useSearch ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
-                              >
+                               <button 
+                                 onClick={() => { handleSearchToggle(!useSearch); setShowMobileOptions(false); }}
+                                 className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${useSearch ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'}`}
+                               >
                                  <span className="text-lg">🌍</span>
                                  <span>Google Search {useSearch ? '(On)' : '(Off)'}</span>
                                </button>
@@ -437,11 +470,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                    </button>
 
                    {/* Google Search Toggle - Hidden on mobile */}
-                  <button 
-                    onClick={() => onToggleSearch(!useSearch)}
-                    className={`hidden md:block p-2 md:p-3 transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 ${useSearch ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500'}`}
-                    title="Toggle Google Search"
-                  >
+                   <button 
+                     onClick={() => handleSearchToggle(!useSearch)}
+                     className={`hidden md:block p-2 md:p-3 transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 ${useSearch ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500'}`}
+                     title="Toggle Google Search"
+                   >
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />
                       </svg>
@@ -552,6 +585,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                      )}
                    </div>
 
+                   {/* Model Indicator - Mobile only */}
+                   <div className="md:hidden flex items-center gap-1 bg-gray-100 dark:bg-slate-700/50 rounded-full px-2 py-1 border border-gray-200 dark:border-slate-600">
+                     <span className={selectedModel.includes('pro') ? 'text-indigo-500' : 'text-green-500'}>●</span>
+                     <span className="text-xs font-medium text-gray-600 dark:text-gray-300">{getModelName()}</span>
+                   </div>
+
                    {/* Model Selector - Hidden on mobile */}
                    <div className="relative hidden md:block" ref={modelMenuRef}>
                       <button 
@@ -569,7 +608,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             {AVAILABLE_MODELS.map(model => (
                               <button
                                 key={model.id}
-                                onClick={() => { onModelChange(model.id); setShowModelMenu(false); }}
+                                onClick={() => { handleModelChange(model.id); setShowModelMenu(false); }}
                                 className={`w-full text-left p-2 rounded-lg text-xs transition-colors flex flex-col ${selectedModel === model.id ? 'bg-indigo-50 dark:bg-slate-700' : 'hover:bg-gray-50 dark:hover:bg-slate-700'}`}
                               >
                                 <div className="flex items-center justify-between">

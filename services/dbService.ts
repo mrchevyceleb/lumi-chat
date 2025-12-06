@@ -42,6 +42,51 @@ const baseSettings = (): UserSettings => ({
     webSearchEnabled: false
 });
 
+// Helper function to check if today is the last day of the month
+const isLastDayOfMonth = (): boolean => {
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow.getDate() === 1;
+};
+
+// Helper function to check if we need to reset usage stats
+// Resets if: we're on the last day of the month AND last_updated is from a previous month
+// This ensures we always have month-to-date totals
+const shouldResetUsage = (lastUpdated: string | null): boolean => {
+    if (!lastUpdated) return false;
+    if (!isLastDayOfMonth()) return false;
+    
+    const lastUpdatedDate = new Date(lastUpdated);
+    const today = new Date();
+    
+    // Check if last_updated is from a previous month or year
+    // This ensures stats reset on the last day of each month for month-to-date tracking
+    return lastUpdatedDate.getMonth() !== today.getMonth() || 
+           lastUpdatedDate.getFullYear() !== today.getFullYear();
+};
+
+// Helper function to reset usage stats
+const resetUsageStats = async (userId: string): Promise<void> => {
+    try {
+        const { error } = await supabase
+            .from('user_usage')
+            .upsert({ 
+                user_id: userId, 
+                input_tokens: 0, 
+                output_tokens: 0,
+                model_stats: {},
+                last_updated: new Date().toISOString() 
+            });
+        
+        if (error) {
+            logError("Could not reset usage stats", error);
+        }
+    } catch (e) {
+        logError("Usage stats reset failed silently", e);
+    }
+};
+
 export const dbService = {
 
   // --- User Settings ---
@@ -124,7 +169,7 @@ export const dbService = {
     try {
         const { data, error } = await supabase
         .from('user_usage')
-        .select('input_tokens, output_tokens, model_stats') 
+        .select('input_tokens, output_tokens, model_stats, last_updated') 
         .eq('user_id', user.id)
         .single();
 
@@ -132,6 +177,12 @@ export const dbService = {
             if (error.code !== 'PGRST116') {
                 logError("Usage stats not available", error);
             }
+            return { inputTokens: 0, outputTokens: 0, modelBreakdown: {} };
+        }
+
+        // Check if we need to reset (on last day of month and stats are from previous month)
+        if (data && shouldResetUsage(data.last_updated)) {
+            await resetUsageStats(user.id);
             return { inputTokens: 0, outputTokens: 0, modelBreakdown: {} };
         }
 
@@ -158,9 +209,34 @@ export const dbService = {
         // First fetch current stats to merge
         const { data: currentData } = await supabase
             .from('user_usage')
-            .select('input_tokens, output_tokens, model_stats')
+            .select('input_tokens, output_tokens, model_stats, last_updated')
             .eq('user_id', user.id)
             .single();
+        
+        // Check if we need to reset (on last day of month and stats are from previous month)
+        if (currentData && shouldResetUsage(currentData.last_updated)) {
+            await resetUsageStats(user.id);
+            // After reset, start fresh with new tokens
+            const newModelStats: Record<string, { input: number; output: number }> = {};
+            if (modelId) {
+                newModelStats[modelId] = { input: inputTokens, output: outputTokens };
+            }
+            
+            const { error } = await supabase
+                .from('user_usage')
+                .upsert({ 
+                    user_id: user.id, 
+                    input_tokens: inputTokens, 
+                    output_tokens: outputTokens,
+                    model_stats: newModelStats,
+                    last_updated: new Date().toISOString() 
+                });
+            
+            if (error) {
+                logError("Could not update usage stats after reset", error);
+            }
+            return;
+        }
         
         let newTotalInput = inputTokens;
         let newTotalOutput = outputTokens;
@@ -313,7 +389,9 @@ export const dbService = {
             isPinned: c.is_pinned,
             personaId: c.persona_id,
             lastUpdated: toTimestamp(c.last_updated),
-            messages: chatMsgs
+            messages: chatMsgs,
+            modelId: c.model_id || undefined,
+            useSearch: c.use_search || false
         };
     });
   },
@@ -325,7 +403,9 @@ export const dbService = {
         folder_id: chat.folderId || null,
         is_pinned: chat.isPinned,
         persona_id: chat.personaId,
-        last_updated: toTimestamp(chat.lastUpdated)
+        last_updated: toTimestamp(chat.lastUpdated),
+        model_id: chat.modelId || null,
+        use_search: chat.useSearch || false
     }]);
     if (error) logError("Create chat error", error);
   },
@@ -341,6 +421,8 @@ export const dbService = {
     }
     
     if (updates.personaId !== undefined) payload.persona_id = updates.personaId;
+    if (updates.modelId !== undefined) payload.model_id = updates.modelId || null;
+    if (updates.useSearch !== undefined) payload.use_search = updates.useSearch;
 
     const { error } = await supabase.from('chats').update(payload).eq('id', chatId);
     if (error) logError("Update chat error", error);

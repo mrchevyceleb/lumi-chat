@@ -8,7 +8,7 @@ import { ChatInput } from './components/ChatInput'; // New Import
 import { streamChatResponse, generateChatTitle, InvalidApiKeyError } from './services/geminiService';
 import { ChatSession, Folder, Message, Persona, DEFAULT_PERSONA, CODING_PERSONA, ModelId, AVAILABLE_MODELS, UserSettings, FileAttachment, ProcessedFileInfo } from './types';
 import { LiveSessionOverlay } from './components/LiveSessionOverlay';
-import { supabase } from './services/supabaseClient';
+import { supabase, attemptSessionRecovery, isAuthError } from './services/supabaseClient';
 import { dbService, UsageStats } from './services/dbService';
 import { ragService } from './services/ragService'; // Import RAG Service
 import { AuthOverlay } from './components/AuthOverlay';
@@ -212,6 +212,7 @@ const App: React.FC = () => {
   });
 
   const [isLiveMode, setIsLiveMode] = useState(false);
+  const [liveRagContext, setLiveRagContext] = useState<string>("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isVaultOpen, setIsVaultOpen] = useState(false);
 
@@ -227,35 +228,102 @@ const App: React.FC = () => {
   useEffect(() => {
     const checkUser = async () => {
       setIsAuthChecking(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      setSession(session);
-      setIsAuthChecking(false);
       
-      if (session) {
-        loadUserData();
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        // If there's a session error or the session is invalid, try to recover
+        if (error || !session) {
+          console.log('No valid session found, checking for recoverable session...');
+          const recovered = await attemptSessionRecovery();
+          if (recovered) {
+            const { data: { session: newSession } } = await supabase.auth.getSession();
+            setSession(newSession);
+            if (newSession) {
+              loadUserData();
+            }
+          } else {
+            setSession(null);
+          }
+        } else {
+          setSession(session);
+          loadUserData();
+        }
+      } catch (e) {
+        console.error('Auth check failed:', e);
+        setSession(null);
       }
+      
+      setIsAuthChecking(false);
     };
     checkUser();
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'TOKEN_REFRESHED') return;
-
-      setSession(session);
-      if (session) {
-        loadUserData();
-      } else {
-        // Clear state on logout
+      console.log('Auth state changed:', event);
+      
+      if (event === 'TOKEN_REFRESHED') {
+        console.log('Token refreshed successfully');
+        return;
+      }
+      
+      if (event === 'SIGNED_OUT') {
+        // Clear all state on logout
         setChats([]);
         setFolders([]);
         setPersonas(INITIAL_PERSONAS);
         setActiveChatId(null);
         setOpenTabs([]);
         setUsageStats({ inputTokens: 0, outputTokens: 0, modelBreakdown: {} });
+        // Clear caches
+        localStorage.removeItem('lumi_chats_cache');
+        localStorage.removeItem('lumi_folders_cache');
+        localStorage.removeItem('lumi_active_chat');
+      }
+
+      setSession(session);
+      if (session) {
+        loadUserData();
       }
     });
 
-    return () => subscription.unsubscribe();
+    // Periodic session validation (every 5 minutes) - critical for PWAs
+    const sessionCheckInterval = setInterval(async () => {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (!currentSession && session) {
+        // Session expired, try to recover
+        console.log('Session expired during use, attempting recovery...');
+        const recovered = await attemptSessionRecovery();
+        if (!recovered) {
+          setSession(null);
+        }
+      }
+    }, 5 * 60 * 1000); // Every 5 minutes
+
+    // Listen for auth error messages from the service worker
+    const handleServiceWorkerMessage = async (event: MessageEvent) => {
+      if (event.data && event.data.type === 'AUTH_ERROR') {
+        console.warn('Service worker detected auth error:', event.data);
+        // Try to recover the session
+        const recovered = await attemptSessionRecovery();
+        if (!recovered) {
+          // Force re-login
+          setSession(null);
+        }
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+    }
+
+    return () => {
+      subscription.unsubscribe();
+      clearInterval(sessionCheckInterval);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+      }
+    };
   }, []);
 
 
@@ -291,8 +359,21 @@ const App: React.FC = () => {
         if (fetchedSettings) {
           applyFetchedSettings(fetchedSettings);
         }
-    } catch (error) {
+    } catch (error: any) {
         console.error("Failed to load data", error);
+        
+        // If it's an auth error (401/403), the session is invalid
+        if (isAuthError(error)) {
+          console.warn('Auth error during data load, attempting recovery...');
+          const recovered = await attemptSessionRecovery();
+          if (!recovered) {
+            // Force re-login
+            setSession(null);
+          } else {
+            // Retry loading data after recovery
+            loadUserData();
+          }
+        }
     } finally {
         setIsLoadingData(false);
     }
@@ -322,13 +403,22 @@ const App: React.FC = () => {
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setIsSettingsOpen(false);
-    // Clear cache
+    
+    // Clear localStorage caches
     localStorage.removeItem('lumi_chats_cache');
     localStorage.removeItem('lumi_folders_cache');
+    localStorage.removeItem('lumi_active_chat');
+    localStorage.removeItem('lumi-auth-token');
+    
     setVoiceName('Kore');
     setDefaultModel(initialDefaultModel);
     setSelectedModel(initialDefaultModel);
     setUseSearch(false);
+    
+    // Tell service worker to clear its caches for a clean slate
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_CACHE' });
+    }
   };
 
   useEffect(() => {
@@ -399,6 +489,21 @@ const App: React.FC = () => {
   };
 
   const getActiveChat = () => chats.find(c => c.id === activeChatId);
+
+  // Handler to save conversation-specific settings
+  const handleSaveChatSettings = async (modelId: ModelId, useSearch: boolean) => {
+    if (!activeChatId) return;
+    
+    // Update local state immediately for responsive UI
+    setChats(prev => prev.map(c => 
+      c.id === activeChatId 
+        ? { ...c, modelId, useSearch }
+        : c
+    ));
+    
+    // Save to database
+    await dbService.updateChat(activeChatId, { modelId, useSearch });
+  };
 
   // --- Actions ---
 
@@ -492,6 +597,26 @@ const App: React.FC = () => {
     }
   };
 
+  // Start live voice mode with RAG context
+  const startLiveMode = async () => {
+    // Fetch RAG context for the voice session
+    // Use a general query to get relevant context from past conversations
+    try {
+      const context = await ragService.getRagContext(
+        "voice conversation context", // General query
+        activeChatId || undefined,
+        activeChat?.messages.slice(-4).filter(m => m.role === 'user').map(m => m.content.slice(0, 100)).join('; ') || "",
+        activeChat?.messages.length || 0
+      );
+      setLiveRagContext(context);
+      console.log("[Voice] Fetched RAG context for live session:", context.slice(0, 100) + "...");
+    } catch (e) {
+      console.warn("[Voice] Failed to fetch RAG context:", e);
+      setLiveRagContext("");
+    }
+    setIsLiveMode(true);
+  };
+
   const handlePersonaChange = async (personaId: string) => {
      const selected = personas.find(p => p.id === personaId) || DEFAULT_PERSONA;
      setCurrentPersona(selected);
@@ -505,6 +630,7 @@ const App: React.FC = () => {
 
   // --- NEW: Handle Live Transcript ---
   const handleLiveTranscript = async (content: string, role: 'user' | 'model') => {
+    console.log(`[Voice] handleLiveTranscript called - Role: ${role}, Content: ${content.slice(0, 50)}...`);
     if (!content.trim()) return;
 
     let chatId = activeChatId;
@@ -558,9 +684,18 @@ const App: React.FC = () => {
     isAtBottomRef.current = true;
   };
 
-  // --- Handle Call End: Send all transcripts to chat ---
+  // --- Handle Call End: Send all transcripts to chat and save to RAG ---
   const handleCallEnd = async (transcripts: Array<{ text: string; role: 'user' | 'model' }>) => {
-    if (!transcripts || transcripts.length === 0) return;
+    if (!transcripts || transcripts.length === 0) {
+      console.log("[Voice] No transcripts to save");
+      return;
+    }
+
+    console.log("[Voice] Processing call end with", transcripts.length, "transcripts");
+    console.log("[Voice] Transcripts breakdown:");
+    transcripts.forEach((t, i) => {
+      console.log(`  [${i}] Role: ${t.role}, Text: ${t.text.slice(0, 60)}...`);
+    });
 
     let chatId = activeChatId;
     let currentChatList = [...chats];
@@ -585,6 +720,7 @@ const App: React.FC = () => {
        isNewChat = true;
        setIsSidebarOpen(false);
        await dbService.createChat(newChat);
+       console.log("[Voice] Created new chat for voice session:", chatId);
     }
 
     // Get current chat to check for existing messages
@@ -594,15 +730,20 @@ const App: React.FC = () => {
     // Create messages from transcripts
     const messagesToAdd: Message[] = transcripts
       .filter(t => t.text.trim())
-      .map(t => ({
+      .map((t, idx) => ({
         id: uuidv4(),
         role: t.role,
         content: t.text.trim(),
-        timestamp: Date.now(),
+        timestamp: Date.now() + idx, // Ensure unique timestamps for ordering
         type: 'text' as const
       }));
 
-    if (messagesToAdd.length === 0) return;
+    if (messagesToAdd.length === 0) {
+      console.log("[Voice] No valid messages to add");
+      return;
+    }
+
+    console.log("[Voice] Adding", messagesToAdd.length, "messages to chat");
 
     // Add all messages to the chat
     setChats(prev => prev.map(c => {
@@ -621,15 +762,54 @@ const App: React.FC = () => {
     }));
 
     // Save messages to database
+    const existingChat = currentChatList.find(c => c.id === chatId);
+    const existingContents = new Set(existingChat?.messages.map(m => m.content) || []);
+    
     for (const msg of messagesToAdd) {
-      const existingChat = chats.find(c => c.id === chatId);
-      if (existingChat) {
-        const existingContents = new Set(existingChat.messages.map(m => m.content));
-        if (!existingContents.has(msg.content)) {
-          await dbService.addMessage(chatId, msg);
-        }
-      } else {
+      if (!existingContents.has(msg.content)) {
         await dbService.addMessage(chatId, msg);
+      }
+    }
+
+    // --- Save voice conversation to RAG memory ---
+    // This allows the RAG system to reference past voice conversations
+    if (session?.user?.id) {
+      // Group transcripts into conversation pairs and save to RAG
+      const userMessages = transcripts.filter(t => t.role === 'user').map(t => t.text.trim()).filter(Boolean);
+      const modelMessages = transcripts.filter(t => t.role === 'model').map(t => t.text.trim()).filter(Boolean);
+      
+      // Save each user-model exchange to RAG for better retrieval
+      const maxPairs = Math.max(userMessages.length, modelMessages.length);
+      for (let i = 0; i < maxPairs; i++) {
+        const userMsg = userMessages[i] || '';
+        const modelMsg = modelMessages[i] || '';
+        
+        if (userMsg || modelMsg) {
+          // Fire and forget - don't await to avoid blocking
+          ragService.saveMemory(
+            session.user.id, 
+            chatId!, 
+            userMsg || "[Voice interaction]", 
+            modelMsg || "[Voice response]"
+          ).then(() => {
+            console.log("[Voice] Saved voice exchange to RAG memory");
+          }).catch(err => {
+            console.warn("[Voice] Failed to save to RAG:", err);
+          });
+        }
+      }
+    }
+
+    // Generate title if this is a new chat with voice content
+    if (isNewChat && messagesToAdd.length > 0) {
+      const firstUserMsg = messagesToAdd.find(m => m.role === 'user')?.content || '';
+      if (firstUserMsg) {
+        generateChatTitle(firstUserMsg).then(async (aiTitle) => {
+          if (!aiTitle) return;
+          const cleanTitle = aiTitle.replace(/^"|"$/g, '');
+          setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: cleanTitle } : c));
+          await dbService.updateChat(chatId!, { title: cleanTitle });
+        });
       }
     }
 
@@ -1057,6 +1237,7 @@ const App: React.FC = () => {
         onClose={() => setIsLiveMode(false)} 
         persona={currentPersona} 
         voiceName={voiceName}
+        ragContext={liveRagContext}
         onTranscript={handleLiveTranscript} // Pass the handler for incremental updates
         onCallEnd={handleCallEnd} // Pass the handler for sending all transcripts when call ends
       />
@@ -1112,7 +1293,7 @@ const App: React.FC = () => {
            </div>
            
            <div className="flex items-center gap-1 flex-shrink-0">
-             <button onClick={() => setIsLiveMode(true)} className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-gradient-to-r from-red-500 to-pink-500 text-white shadow-lg shadow-pink-500/20 hover:scale-105 active:scale-90 transition-transform" title="Start Live Voice Chat">
+             <button onClick={startLiveMode} className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-gradient-to-r from-red-500 to-pink-500 text-white shadow-lg shadow-pink-500/20 hover:scale-105 active:scale-90 transition-transform" title="Start Live Voice Chat">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" /></svg>
              </button>
            </div>
@@ -1202,10 +1383,10 @@ const App: React.FC = () => {
           onCreatePersona={startCreatingPersona}
           onEditPersona={startEditingPersona}
           onDeletePersona={handleDeletePersona}
-        selectedModel={selectedModel}
-        onModelChange={handleModelChange}
-        useSearch={useSearch}
-        onToggleSearch={handleToggleSearch}
+          defaultModel={defaultModel}
+          activeChatModelId={activeChat?.modelId}
+          activeChatUseSearch={activeChat?.useSearch}
+          onSaveChatSettings={handleSaveChatSettings}
         />
 
       </div>
