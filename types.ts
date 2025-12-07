@@ -24,6 +24,7 @@ export interface ChatSession {
   lastUpdated: number;
   modelId?: ModelId; // Conversation-specific model selection
   useSearch?: boolean; // Conversation-specific web search toggle
+  hasUnsyncedChanges?: boolean; // Local-only updates pending save
 }
 
 export interface Folder {

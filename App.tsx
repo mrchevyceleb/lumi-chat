@@ -59,6 +59,17 @@ const App: React.FC = () => {
     return window.innerWidth >= 768;
   });
   const [isLoadingData, setIsLoadingData] = useState(false);
+  const UNSYNCED_STORAGE_KEY = 'lumi_unsynced_map';
+  const UNSYNCED_CHAT_MARKER = '__chat__';
+
+  const [unsyncedByChat, setUnsyncedByChat] = useState<Record<string, string[]>>(() => {
+    try {
+      const raw = localStorage.getItem(UNSYNCED_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
   
   // Theme State
   const [darkMode, setDarkMode] = useState(() => {
@@ -167,6 +178,13 @@ const App: React.FC = () => {
     return () => clearTimeout(timer);
   }, [folders]);
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      localStorage.setItem(UNSYNCED_STORAGE_KEY, JSON.stringify(unsyncedByChat));
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [unsyncedByChat]);
+
   // Interaction State
   const [isTyping, setIsTyping] = useState(false);
   
@@ -215,6 +233,37 @@ const App: React.FC = () => {
   const [liveRagContext, setLiveRagContext] = useState<string>("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isVaultOpen, setIsVaultOpen] = useState(false);
+
+  const markUnsynced = (chatId: string, messageIds: string[]) => {
+    setUnsyncedByChat(prev => {
+      const existing = new Set(prev[chatId] || []);
+      messageIds.forEach(id => existing.add(id));
+      const next = { ...prev, [chatId]: Array.from(existing) };
+      setChats(prevChats => prevChats.map(c => c.id === chatId ? { ...c, hasUnsyncedChanges: true } : c));
+      return next;
+    });
+  };
+
+  const clearUnsynced = (chatId: string, messageIds: string[]) => {
+    setUnsyncedByChat(prev => {
+      const existing = new Set(prev[chatId] || []);
+      messageIds.forEach(id => existing.delete(id));
+      let next: Record<string, string[]> = {};
+      if (existing.size === 0) {
+        const { [chatId]: _, ...rest } = prev;
+        next = rest;
+      } else {
+        next = { ...prev, [chatId]: Array.from(existing) };
+      }
+      const stillUnsynced = !!next[chatId] && next[chatId].length > 0;
+      setChats(prevChats => prevChats.map(c => c.id === chatId ? { ...c, hasUnsyncedChanges: stillUnsynced } : c));
+      return next;
+    });
+  };
+
+  const chatHasUnsynced = (chatId: string) => {
+    return !!unsyncedByChat[chatId] && unsyncedByChat[chatId].length > 0;
+  };
 
   // --- Refs ---
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -275,10 +324,12 @@ const App: React.FC = () => {
         setActiveChatId(null);
         setOpenTabs([]);
         setUsageStats({ inputTokens: 0, outputTokens: 0, modelBreakdown: {} });
+        setUnsyncedByChat({});
         // Clear caches
         localStorage.removeItem('lumi_chats_cache');
         localStorage.removeItem('lumi_folders_cache');
         localStorage.removeItem('lumi_active_chat');
+        localStorage.removeItem(UNSYNCED_STORAGE_KEY);
       }
 
       setSession(session);
@@ -326,6 +377,90 @@ const App: React.FC = () => {
     };
   }, []);
 
+  const readCachedChats = (): ChatSession[] => {
+    try {
+      const saved = localStorage.getItem('lumi_chats_cache');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const mergeChatsWithCache = (cachedChats: ChatSession[], serverChats: ChatSession[]) => {
+    const serverMap = new Map<string, ChatSession>(serverChats.map(c => [c.id, c]));
+    const cacheMap = new Map<string, ChatSession>(cachedChats.map(c => [c.id, c]));
+    const allChatIds = new Set<string>([...serverMap.keys(), ...cacheMap.keys()]);
+    const merged: ChatSession[] = [];
+
+    for (const chatId of allChatIds) {
+      const serverChat = serverMap.get(chatId);
+      const localChat = cacheMap.get(chatId);
+      const baseChat = serverChat || localChat;
+      if (!baseChat) continue;
+
+      const messageMap = new Map<string, Message>();
+      (serverChat?.messages || []).forEach(m => messageMap.set(m.id, m));
+      (localChat?.messages || []).forEach(m => {
+        if (!messageMap.has(m.id)) {
+          messageMap.set(m.id, m);
+        }
+      });
+
+      const messages = Array.from(messageMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+      const lastUpdatedCandidates = [
+        serverChat?.lastUpdated || 0,
+        localChat?.lastUpdated || 0,
+        messages.length ? messages[messages.length - 1].timestamp : 0
+      ];
+
+      const hasLocalOnlyMessages = (localChat?.messages || []).some(m => !(serverChat?.messages || []).find(sm => sm.id === m.id));
+      const mergedChat: ChatSession = {
+        ...baseChat,
+        title: serverChat?.title ?? localChat?.title ?? 'New Conversation',
+        folderId: serverChat?.folderId ?? localChat?.folderId,
+        isPinned: serverChat?.isPinned ?? localChat?.isPinned ?? false,
+        personaId: serverChat?.personaId ?? localChat?.personaId ?? DEFAULT_PERSONA.id,
+        modelId: serverChat?.modelId ?? localChat?.modelId,
+        useSearch: serverChat?.useSearch ?? localChat?.useSearch,
+        messages,
+        lastUpdated: Math.max(...lastUpdatedCandidates),
+        hasUnsyncedChanges: chatHasUnsynced(chatId) || !serverChat || hasLocalOnlyMessages
+      };
+
+      merged.push(mergedChat);
+    }
+
+    merged.sort((a, b) => b.lastUpdated - a.lastUpdated);
+    return { merged, serverMap };
+  };
+
+  const reconcileUnsynced = async (mergedChats: ChatSession[], serverMap: Map<string, ChatSession>) => {
+    for (const chat of mergedChats) {
+      if (!chat.hasUnsyncedChanges) continue;
+      const serverChat = serverMap.get(chat.id);
+      const serverMessageIds = new Set(serverChat?.messages.map(m => m.id) || []);
+
+      try {
+        if (!serverChat) {
+          markUnsynced(chat.id, [UNSYNCED_CHAT_MARKER]);
+          await dbService.createChat({ ...chat, messages: [] });
+          clearUnsynced(chat.id, [UNSYNCED_CHAT_MARKER]);
+        }
+
+        const missingMessages = chat.messages.filter(m => !serverMessageIds.has(m.id));
+        if (missingMessages.length > 0) {
+          markUnsynced(chat.id, missingMessages.map(m => m.id));
+          for (const msg of missingMessages) {
+            await dbService.addMessage(chat.id, msg);
+          }
+          clearUnsynced(chat.id, missingMessages.map(m => m.id));
+        }
+      } catch (e) {
+        console.warn('Reconciliation failed for chat', chat.id, e);
+      }
+    }
+  };
+
 
   // --- Tab Management Effect ---
   useEffect(() => {
@@ -340,6 +475,7 @@ const App: React.FC = () => {
   const loadUserData = async () => {
     // Only show loading indicator if we have empty local state
     if (chats.length === 0) setIsLoadingData(true);
+    const cachedChats = readCachedChats();
     
     try {
         const [fetchedFolders, fetchedPersonas, fetchedChats, fetchedUsage, fetchedSettings] = await Promise.all([
@@ -350,15 +486,19 @@ const App: React.FC = () => {
             dbService.getUserSettings()
         ]);
         
-        // Update state with fetched data (reconciliation/overwrite)
-        setFolders(fetchedFolders);
+        // Merge server data with cached local state to avoid losing unsaved messages
+        const { merged, serverMap } = mergeChatsWithCache(cachedChats, fetchedChats);
         const allPersonas = [...INITIAL_PERSONAS, ...fetchedPersonas];
+        setFolders(fetchedFolders);
         setPersonas(allPersonas);
-        setChats(fetchedChats);
+        setChats(merged);
         setUsageStats(fetchedUsage);
         if (fetchedSettings) {
           applyFetchedSettings(fetchedSettings);
         }
+
+        // Attempt to persist any local-only messages in the background
+        reconcileUnsynced(merged, serverMap);
     } catch (error: any) {
         console.error("Failed to load data", error);
         
@@ -409,6 +549,7 @@ const App: React.FC = () => {
     localStorage.removeItem('lumi_folders_cache');
     localStorage.removeItem('lumi_active_chat');
     localStorage.removeItem('lumi-auth-token');
+    localStorage.removeItem(UNSYNCED_STORAGE_KEY);
     
     setVoiceName('Kore');
     setDefaultModel(initialDefaultModel);
@@ -846,7 +987,13 @@ const App: React.FC = () => {
       setActiveChatId(chatId);
       isNewChat = true;
       setIsSidebarOpen(false); // Close sidebar when starting new chat
-      dbService.createChat(newChat); 
+      markUnsynced(newChat.id, [UNSYNCED_CHAT_MARKER]);
+      try {
+        await dbService.createChat(newChat); 
+        clearUnsynced(newChat.id, [UNSYNCED_CHAT_MARKER]);
+      } catch (e) {
+        console.error("Failed to persist new chat", e);
+      }
     }
 
     const chatBeforeUpdate = chats.find(c => c.id === chatId);
@@ -896,14 +1043,24 @@ const App: React.FC = () => {
     setTimeout(() => scrollToBottom('auto'), 0);
     
     // Background DB Update
-    dbService.addMessage(chatId, newMessage);
+    markUnsynced(chatId, [newMessage.id]);
+    try {
+      await dbService.addMessage(chatId, newMessage);
+      clearUnsynced(chatId, [newMessage.id]);
+    } catch (e) {
+      console.error("Failed to persist user message", e);
+    }
     
     const updatedChat = updatedChats.find(c => c.id === chatId);
     if (updatedChat && !isNewChat) {
-         dbService.updateChat(chatId, { 
-            lastUpdated: Date.now(),
-            title: updatedChat.title
-         });
+         try {
+            await dbService.updateChat(chatId, { 
+               lastUpdated: Date.now(),
+               title: updatedChat.title
+            });
+         } catch (e) {
+            console.error("Failed to update chat metadata", e);
+         }
     }
 
     // --- RAG & Title Generation (Background) ---
@@ -986,7 +1143,8 @@ const App: React.FC = () => {
          }
          return c;
       }));
-      
+     
+      markUnsynced(chatId!, [aiMessageId]);
       await dbService.addMessage(chatId!, { 
           id: aiMessageId, 
           role: 'model', 
@@ -1067,6 +1225,7 @@ const App: React.FC = () => {
       }
 
       await dbService.updateMessageContent(aiMessageId, response.text, response.groundingUrls, finalFileMetadata);
+      clearUnsynced(chatId!, [aiMessageId]);
 
       // Step 2: Save Memory to Supabase Vector Store
       if (session?.user?.id && response.text) {

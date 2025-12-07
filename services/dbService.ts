@@ -1,5 +1,5 @@
 
-import { supabase } from './supabaseClient';
+import { supabase, attemptSessionRecovery, isAuthError } from './supabaseClient';
 import { ChatSession, Message, Folder, Persona, VaultFolder, VaultItem, ModelId, UserSettings, AVAILABLE_MODELS } from '../types';
 
 export interface UsageStats {
@@ -21,6 +21,32 @@ const toTimestamp = (val: string | number | Date): number => {
 
 const logError = (context: string, error: any) => {
     console.error(`${context}:`, error?.message || error || "Unknown error");
+};
+
+// Retry once on auth-related failures (expired/invalid JWT)
+const withAuthRetry = async <T>(
+    operation: () => Promise<{ data?: T; error: any }>,
+    context: string
+): Promise<{ data?: T; error: any }> => {
+    let lastError: any = null;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const { data, error } = await operation();
+        if (!error) return { data, error: null };
+
+        lastError = error;
+
+        if (isAuthError(error)) {
+            const recovered = await attemptSessionRecovery();
+            if (recovered) {
+                continue;
+            }
+        }
+        break;
+    }
+
+    logError(context, lastError);
+    return { data: undefined, error: lastError };
 };
 
 const DEFAULT_VOICE_NAME = 'Kore';
@@ -397,7 +423,7 @@ export const dbService = {
   },
 
   async createChat(chat: ChatSession): Promise<void> {
-    const { error } = await supabase.from('chats').insert([{
+    const run = async () => supabase.from('chats').insert([{
         id: chat.id,
         title: chat.title,
         folder_id: chat.folderId || null,
@@ -407,7 +433,10 @@ export const dbService = {
         model_id: chat.modelId || null,
         use_search: chat.useSearch || false
     }]);
-    if (error) logError("Create chat error", error);
+
+    const { error } = await withAuthRetry(run, `Create chat ${chat.id}`);
+    if (error) throw error;
+    console.log('[DB] Chat persisted', { chatId: chat.id, title: chat.title });
   },
 
   async updateChat(chatId: string, updates: Partial<ChatSession>): Promise<void> {
@@ -424,8 +453,9 @@ export const dbService = {
     if (updates.modelId !== undefined) payload.model_id = updates.modelId || null;
     if (updates.useSearch !== undefined) payload.use_search = updates.useSearch;
 
-    const { error } = await supabase.from('chats').update(payload).eq('id', chatId);
-    if (error) logError("Update chat error", error);
+    const run = async () => supabase.from('chats').update(payload).eq('id', chatId);
+    const { error } = await withAuthRetry(run, `Update chat ${chatId}`);
+    if (error) throw error;
   },
 
   async deleteChat(chatId: string): Promise<void> {
@@ -452,8 +482,10 @@ export const dbService = {
         messagePayload.model = message.model;
     }
 
-    const { error } = await supabase.from('messages').insert([messagePayload]);
-    if (error) logError("Add message error", error);
+    const run = async () => supabase.from('messages').insert([messagePayload]);
+    const { error } = await withAuthRetry(run, `Add message ${message.id} to chat ${chatId}`);
+    if (error) throw error;
+    console.log('[DB] Message persisted', { chatId, messageId: message.id, role: message.role });
   },
   
   async updateMessageContent(messageId: string, content: string, groundingUrls?: any[], fileMetadata?: any[]): Promise<void> {
@@ -461,8 +493,9 @@ export const dbService = {
     if (groundingUrls) payload.grounding_urls = groundingUrls;
     if (fileMetadata) payload.file_metadata = fileMetadata;
     
-    const { error } = await supabase.from('messages').update(payload).eq('id', messageId);
-    if (error) logError("Update message error", error);
+    const run = async () => supabase.from('messages').update(payload).eq('id', messageId);
+    const { error } = await withAuthRetry(run, `Update message ${messageId}`);
+    if (error) throw error;
   },
 
   // --- Vault ---
