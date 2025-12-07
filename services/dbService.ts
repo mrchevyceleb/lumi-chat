@@ -482,7 +482,8 @@ export const dbService = {
         messagePayload.model = message.model;
     }
 
-    const run = async () => supabase.from('messages').insert([messagePayload]);
+    // Use upsert instead of insert to handle reconciliation gracefully
+    const run = async () => supabase.from('messages').upsert([messagePayload]);
     const { error } = await withAuthRetry(run, `Add message ${message.id} to chat ${chatId}`);
     if (error) throw error;
     console.log('[DB] Message persisted', { chatId, messageId: message.id, role: message.role });
