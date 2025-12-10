@@ -38,9 +38,49 @@
               }
             });
             
+            // Listen for auth error messages from service worker
+            navigator.serviceWorker.addEventListener('message', async (event) => {
+              if (event.data && event.data.type === 'AUTH_ERROR') {
+                console.error('Service worker detected auth error:', event.data);
+                
+                // Clear all caches
+                const cacheNames = await caches.keys();
+                await Promise.all(cacheNames.map(name => caches.delete(name)));
+                console.log('Caches cleared due to auth error');
+                
+                // Clear localStorage auth tokens
+                localStorage.removeItem('lumi-auth-token');
+                
+                // Reload the page to force fresh fetch (without using cache)
+                window.location.reload(true);
+              }
+            });
+            
             console.log('Service Worker registered successfully');
           } catch (error) {
             console.error('Service Worker registration failed:', error);
+          }
+        });
+        
+        // Add a handler for FORBIDDEN errors during app startup
+        window.addEventListener('error', async (event) => {
+          // Check if this is a fetch error that might indicate a cached FORBIDDEN page
+          if (event.message && event.message.includes('403')) {
+            console.error('Detected FORBIDDEN error, clearing caches...');
+            
+            try {
+              // Clear all caches
+              const cacheNames = await caches.keys();
+              await Promise.all(cacheNames.map(name => caches.delete(name)));
+              
+              // Clear auth token
+              localStorage.removeItem('lumi-auth-token');
+              
+              // Reload without cache
+              window.location.reload(true);
+            } catch (err) {
+              console.error('Failed to clear caches:', err);
+            }
           }
         });
       }

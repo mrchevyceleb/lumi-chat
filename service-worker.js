@@ -1,5 +1,5 @@
 
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const APP_SHELL_CACHE = `lumi-chat-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `lumi-chat-runtime-${CACHE_VERSION}`;
 const APP_SHELL = [
@@ -75,6 +75,23 @@ self.addEventListener('message', (event) => {
     });
   }
   
+  if (event.data && event.data.type === 'FORCE_REFRESH') {
+    console.log('Received FORCE_REFRESH message, clearing caches and reloading...');
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cacheName) => caches.delete(cacheName))
+      );
+    }).then(() => {
+      console.log('All caches cleared for force refresh');
+      // Notify clients to reload
+      self.clients.matchAll().then(clients => {
+        clients.forEach(client => {
+          client.postMessage({ type: 'RELOAD_REQUIRED' });
+        });
+      });
+    });
+  }
+  
   if (event.data === 'SKIP_WAITING' || (event.data && event.data.type === 'SKIP_WAITING')) {
     self.skipWaiting();
   }
@@ -145,7 +162,7 @@ async function handleNavigationRequest(event) {
   // Use any preloaded response first
   try {
     const preload = await event.preloadResponse;
-    if (preload) {
+    if (preload && preload.ok) {
       cache.put('/index.html', preload.clone());
       return preload;
     }
@@ -156,9 +173,36 @@ async function handleNavigationRequest(event) {
   // Network first with offline fallback
   try {
     const response = await fetch(event.request);
-    cache.put('/index.html', response.clone());
-    return response;
+    
+    // Only cache successful responses (200-299)
+    // For 401/403, clear cache and notify clients of auth error
+    if (response.ok) {
+      cache.put('/index.html', response.clone());
+      return response;
+    } else if (response.status === 401 || response.status === 403) {
+      console.warn('Auth error on navigation (', response.status, '), clearing cache...');
+      
+      // Clear all caches to prevent caching the error page
+      const cacheNames = await caches.keys();
+      await Promise.all(cacheNames.map(name => caches.delete(name)));
+      
+      // Notify all clients about auth error
+      const clients = await self.clients.matchAll();
+      clients.forEach(client => {
+        client.postMessage({ 
+          type: 'AUTH_ERROR', 
+          status: response.status,
+          url: event.request.url 
+        });
+      });
+      
+      return response;
+    } else {
+      // For other errors, don't cache but return the response
+      return response;
+    }
   } catch (err) {
+    // Network failed, try to serve from cache
     const cached = await cache.match('/index.html');
     if (cached) return cached;
     return new Response('Offline', { status: 503, headers: { 'Content-Type': 'text/plain' } });

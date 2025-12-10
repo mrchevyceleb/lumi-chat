@@ -311,7 +311,10 @@ export const dbService = {
   },
 
   async createFolder(name: string): Promise<Folder | null> {
-    const { data, error } = await supabase.from('folders').insert([{ name }]).select().single();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("No authenticated user");
+
+    const { data, error } = await supabase.from('folders').insert([{ name, user_id: user.id }]).select().single();
     if (error) {
         logError("Create folder error", error);
         return null;
@@ -356,8 +359,12 @@ export const dbService = {
   },
 
   async savePersona(persona: Persona): Promise<void> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("No authenticated user");
+
     const payload = {
         id: persona.id,
+        user_id: user.id,
         name: persona.name,
         avatar: persona.avatar,
         system_instruction: persona.systemInstruction,
@@ -423,8 +430,12 @@ export const dbService = {
   },
 
   async createChat(chat: ChatSession): Promise<void> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("No authenticated user");
+
     const run = async () => supabase.from('chats').insert([{
         id: chat.id,
+        user_id: user.id,
         title: chat.title,
         folder_id: chat.folderId || null,
         is_pinned: chat.isPinned,
@@ -467,9 +478,13 @@ export const dbService = {
 
   // --- Messages ---
   async addMessage(chatId: string, message: Message): Promise<void> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("No authenticated user");
+
     const messagePayload: any = {
         id: message.id,
         chat_id: chatId,
+        user_id: user.id,
         role: message.role,
         content: message.content,
         timestamp: toTimestamp(message.timestamp), 
@@ -519,9 +534,12 @@ export const dbService = {
   },
 
   async createVaultFolder(name: string): Promise<VaultFolder | null> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("No authenticated user");
+
     const { data, error } = await supabase
       .from('vault_folders')
-      .insert([{ name }])
+      .insert([{ name, user_id: user.id }])
       .select()
       .single();
     
@@ -562,8 +580,12 @@ export const dbService = {
   },
 
   async saveVaultItem(item: VaultItem): Promise<void> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("No authenticated user");
+
     const { error } = await supabase.from('vault_items').insert([{
       id: item.id,
+      user_id: user.id,
       folder_id: item.folderId,
       content: item.content,
       source_context: item.sourceContext,
