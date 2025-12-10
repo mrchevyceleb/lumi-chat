@@ -96,7 +96,7 @@ export const CODING_PERSONA: Persona = {
 };
 
 // Keep gemini-3.0-pro in the union for backward compatibility, but primary is gemini-3-pro-preview
-export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-3.0-pro' | 'gemini-flash-lite-latest' | 'gpt-5.1' | 'gpt-5-mini' | 'gpt-5-nano' | 'o1' | 'o1-mini';
+export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-3.0-pro' | 'gemini-flash-lite-latest' | 'gpt-5.1' | 'gpt-5-mini' | 'gpt-5-nano' | 'o1' | 'o1-mini' | 'claude-haiku-4-5' | 'claude-sonnet-4-5' | 'claude-opus-4-5';
 
 export interface ModelConfig {
   id: ModelId;
@@ -138,6 +138,13 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     costOutput: 2.00 
   },
   { 
+    id: 'claude-haiku-4-5', 
+    name: 'Claude Haiku 4.5', 
+    description: 'Fastest Claude, near-frontier intelligence.', 
+    costInput: 1.00, 
+    costOutput: 5.00 
+  },
+  { 
     id: 'o1-mini', 
     name: 'o3-mini', 
     description: 'Efficient reasoning model.', 
@@ -165,6 +172,20 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     description: 'Flagship model (preview) for depth & quality.', 
     costInput: 2.00, 
     costOutput: 12.00 
+  },
+  { 
+    id: 'claude-sonnet-4-5', 
+    name: 'Claude Sonnet 4.5', 
+    description: 'Smart model for complex agents & coding.', 
+    costInput: 3.00, 
+    costOutput: 15.00 
+  },
+  { 
+    id: 'claude-opus-4-5', 
+    name: 'Claude Opus 4.5', 
+    description: 'Maximum intelligence, premium reasoning.', 
+    costInput: 5.00, 
+    costOutput: 25.00 
   }
 ];
 

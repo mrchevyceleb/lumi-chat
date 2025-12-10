@@ -1,8 +1,9 @@
 // Supabase Edge Function: gemini-chat
-// Proxies chat requests to Gemini or OpenAI API, keeping API keys server-side
+// Proxies chat requests to Gemini, OpenAI, or Anthropic API, keeping API keys server-side
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { GoogleGenerativeAI } from "https://esm.sh/@google/generative-ai@0.21.0";
+import Anthropic from "https://esm.sh/@anthropic-ai/sdk@0.39.0";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { parseIncomingFile, ParsedFile, normalizeMimeType } from "../_shared/file_parsing.ts";
 
@@ -36,6 +37,11 @@ function isOpenAIModel(modelId: string): boolean {
   return modelId?.startsWith("gpt-") || modelId === "o1" || modelId === "o1-mini";
 }
 
+// Check if the model is an Anthropic model (Claude)
+function isAnthropicModel(modelId: string): boolean {
+  return modelId?.startsWith("claude-");
+}
+
 // Map frontend model IDs to actual API model names
 function mapModelId(modelId: string): string {
   const modelMap: Record<string, string> = {
@@ -51,6 +57,10 @@ function mapModelId(modelId: string): string {
     // o1 models use exact strings
     "o1": "o1",
     "o1-mini": "o1-mini",
+    // Claude models - use API aliases
+    "claude-haiku-4-5": "claude-haiku-4-5",
+    "claude-sonnet-4-5": "claude-sonnet-4-5",
+    "claude-opus-4-5": "claude-opus-4-5",
   };
   
   const mapped = modelMap[modelId];
@@ -647,6 +657,169 @@ INSTRUCTIONS: Use the memory above to provide a personalized response. If the us
   });
 }
 
+// Handle Anthropic streaming response
+async function handleAnthropic(
+  messages: any[],
+  systemInstruction: string,
+  modelId: string,
+  mediaFiles: any[],
+  textContexts: string[],
+  ragContext: string,
+  useSearch: boolean,
+  meta: { processedFiles: ProcessedFileInfo[]; warnings: string[] }
+): Promise<Response> {
+  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+  if (!apiKey) {
+    throw new Error("ANTHROPIC_API_KEY not configured");
+  }
+
+  const anthropic = new Anthropic({ apiKey });
+
+  // Map the model ID to actual API model name
+  const actualModelId = mapModelId(modelId);
+
+  // Build conversation history (exclude last message)
+  const lastMessage = messages[messages.length - 1];
+  const anthropicMessages: any[] = [];
+
+  // Add conversation history (all messages except the last one)
+  for (const msg of messages.slice(0, -1)) {
+    anthropicMessages.push({
+      role: msg.role === "model" ? "assistant" : "user",
+      content: msg.content,
+    });
+  }
+
+  // Build final user message content array
+  const contentParts: any[] = [];
+
+  // Add text contexts (from files, code snippets)
+  if (textContexts && textContexts.length > 0) {
+    let contextText = "Here is the file context for my request:\n";
+    textContexts.forEach((ctx: string) => {
+      contextText += ctx + "\n";
+    });
+    contextText += "\nUser Request:\n";
+    contentParts.push({ type: "text", text: contextText });
+  }
+
+  // Add images (Anthropic format: base64 with type and source)
+  if (mediaFiles && mediaFiles.length > 0) {
+    mediaFiles.forEach((file: { mimeType: string; data: string }) => {
+      contentParts.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: file.mimeType,
+          data: file.data,
+        },
+      });
+    });
+  }
+
+  // Add user text with optional RAG context
+  let finalContent = lastMessage.content;
+  if (ragContext) {
+    finalContent = `YOUR MEMORY OF THIS USER (from previous conversations):
+The following is retrieved context about this user from your long-term memory. This contains information they've shared with you before.
+
+${ragContext}
+
+---
+
+CURRENT REQUEST:
+${lastMessage.content}
+
+INSTRUCTIONS: Use the memory above to provide a personalized response. If the user references their "background", previous discussions, or asks you to "remember" something, the information is likely in the memory above.`;
+  }
+  contentParts.push({ type: "text", text: finalContent });
+
+  // Add final user message
+  anthropicMessages.push({
+    role: "user",
+    content: contentParts,
+  });
+
+  // Note: Anthropic doesn't have built-in web search like Gemini
+  // If useSearch is enabled, we'd need to implement it separately or warn the user
+  if (useSearch) {
+    console.log("Warning: Web search requested but not supported natively by Anthropic");
+  }
+
+  // Create streaming request
+  const stream = await anthropic.messages.stream({
+    model: actualModelId,
+    max_tokens: 4096,
+    system: systemInstruction,
+    messages: anthropicMessages,
+  });
+
+  // Create SSE stream for client
+  const encoder = new TextEncoder();
+  const readableStream = new ReadableStream({
+    async start(controller) {
+      let fullText = "";
+      let usage = { input: 0, output: 0 };
+
+      try {
+        // Stream chunks from Anthropic
+        for await (const chunk of stream) {
+          if (chunk.type === "content_block_delta") {
+            if (chunk.delta?.type === "text_delta") {
+              fullText += chunk.delta.text;
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ type: "chunk", text: fullText })}\n\n`)
+              );
+            }
+          } else if (chunk.type === "message_start") {
+            // Extract usage from message_start event
+            if (chunk.message?.usage) {
+              usage.input = chunk.message.usage.input_tokens || 0;
+            }
+          } else if (chunk.type === "message_delta") {
+            // Extract output tokens from message_delta
+            if (chunk.usage) {
+              usage.output = chunk.usage.output_tokens || 0;
+            }
+          }
+        }
+
+        // Send final message
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              type: "done",
+              text: fullText,
+              groundingUrls: [], // Anthropic doesn't provide grounding URLs
+              usage,
+              processedFiles: meta.processedFiles,
+              warnings: meta.warnings,
+            })}\n\n`
+          )
+        );
+      } catch (error: any) {
+        console.error("Anthropic streaming error:", error);
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ type: "error", error: error.message })}\n\n`
+          )
+        );
+      }
+
+      controller.close();
+    },
+  });
+
+  return new Response(readableStream, {
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -685,6 +858,17 @@ serve(async (req) => {
     // Route to appropriate handler based on model
     if (isOpenAIModel(modelId)) {
       return await handleOpenAI(
+        messages,
+        systemInstruction,
+        modelId,
+        inlineMedia,
+        mergedTextContexts,
+        ragContext,
+        useSearch,
+        { processedFiles, warnings }
+      );
+    } else if (isAnthropicModel(modelId)) {
+      return await handleAnthropic(
         messages,
         systemInstruction,
         modelId,

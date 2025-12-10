@@ -87,9 +87,12 @@ const MODEL_CONTEXT_CONFIGS: Record<string, { maxMessages: number; maxContextCha
   'gemini-3-pro-preview': { maxMessages: 14, maxContextChars: 24000, minRecentMessages: 6 },
   'gemini-3.0-pro': { maxMessages: 14, maxContextChars: 24000, minRecentMessages: 6 }, // alias for compatibility
   'gpt-5.1': { maxMessages: 16, maxContextChars: 28000, minRecentMessages: 6 },
+  'claude-opus-4-5': { maxMessages: 12, maxContextChars: 20000, minRecentMessages: 4 }, // Premium - most expensive
   // Standard models - balanced context
   'gpt-5-mini': { maxMessages: 20, maxContextChars: 32000, minRecentMessages: 6 },
   'gemini-2.5-flash': { maxMessages: 24, maxContextChars: 40000, minRecentMessages: 6 },
+  'claude-sonnet-4-5': { maxMessages: 18, maxContextChars: 32000, minRecentMessages: 6 }, // Standard - balanced
+  'claude-haiku-4-5': { maxMessages: 24, maxContextChars: 40000, minRecentMessages: 6 }, // Standard - affordable
   // Budget models - larger context is affordable
   'gpt-5-nano': { maxMessages: 30, maxContextChars: 48000, minRecentMessages: 8 },
   'gemini-flash-lite-latest': { maxMessages: 30, maxContextChars: 48000, minRecentMessages: 8 },
