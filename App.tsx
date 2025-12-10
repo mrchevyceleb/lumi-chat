@@ -388,6 +388,150 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // --- Real-time Subscription for Cross-Device Sync ---
+  useEffect(() => {
+    if (!session?.user?.id) return;
+
+    console.log('[Realtime] Setting up subscriptions...');
+
+    // Subscribe to messages for real-time sync
+    const messagesChannel = supabase
+      .channel('messages-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'messages',
+          filter: `user_id=eq.${session.user.id}`,
+        },
+        (payload) => {
+          console.log('[Realtime] Message change detected:', payload.eventType, payload.new);
+          
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const newMsg = payload.new as any;
+            
+            setChats((prevChats) => {
+              return prevChats.map((chat) => {
+                if (chat.id === newMsg.chat_id) {
+                  // Check if message already exists
+                  const existingMsgIndex = chat.messages.findIndex(m => m.id === newMsg.id);
+                  
+                  const message = {
+                    id: newMsg.id,
+                    role: newMsg.role as 'user' | 'model',
+                    content: newMsg.content,
+                    timestamp: newMsg.timestamp,
+                    type: newMsg.type as 'text' | 'image' | 'audio',
+                    groundingUrls: newMsg.grounding_urls,
+                    model: newMsg.model,
+                    fileMetadata: newMsg.file_metadata || [],
+                  };
+                  
+                  if (existingMsgIndex !== -1) {
+                    // Update existing message
+                    const updatedMessages = [...chat.messages];
+                    updatedMessages[existingMsgIndex] = message;
+                    return { ...chat, messages: updatedMessages, lastUpdated: Date.now() };
+                  } else {
+                    // Add new message
+                    return {
+                      ...chat,
+                      messages: [...chat.messages, message].sort((a, b) => a.timestamp - b.timestamp),
+                      lastUpdated: Date.now(),
+                    };
+                  }
+                }
+                return chat;
+              });
+            });
+          } else if (payload.eventType === 'DELETE') {
+            const deletedMsg = payload.old as any;
+            setChats((prevChats) =>
+              prevChats.map((chat) => {
+                if (chat.id === deletedMsg.chat_id) {
+                  return {
+                    ...chat,
+                    messages: chat.messages.filter(m => m.id !== deletedMsg.id),
+                    lastUpdated: Date.now(),
+                  };
+                }
+                return chat;
+              })
+            );
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('[Realtime] Messages subscription status:', status);
+      });
+
+    // Subscribe to chats for real-time sync
+    const chatsChannel = supabase
+      .channel('chats-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'chats',
+          filter: `user_id=eq.${session.user.id}`,
+        },
+        (payload) => {
+          console.log('[Realtime] Chat change detected:', payload.eventType);
+          
+          if (payload.eventType === 'INSERT') {
+            const newChat = payload.new as any;
+            const chat: ChatSession = {
+              id: newChat.id,
+              title: newChat.title,
+              folderId: newChat.folder_id || undefined,
+              isPinned: newChat.is_pinned,
+              personaId: newChat.persona_id,
+              lastUpdated: newChat.last_updated,
+              messages: [],
+              modelId: newChat.model_id || undefined,
+              useSearch: newChat.use_search || false,
+            };
+            
+            setChats((prevChats) => {
+              if (prevChats.find(c => c.id === chat.id)) return prevChats;
+              return [chat, ...prevChats];
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedChat = payload.new as any;
+            setChats((prevChats) =>
+              prevChats.map((chat) =>
+                chat.id === updatedChat.id
+                  ? {
+                      ...chat,
+                      title: updatedChat.title,
+                      folderId: updatedChat.folder_id || undefined,
+                      isPinned: updatedChat.is_pinned,
+                      lastUpdated: updatedChat.last_updated,
+                      modelId: updatedChat.model_id || undefined,
+                      useSearch: updatedChat.use_search || false,
+                    }
+                  : chat
+              )
+            );
+          } else if (payload.eventType === 'DELETE') {
+            const deletedChat = payload.old as any;
+            setChats((prevChats) => prevChats.filter(c => c.id !== deletedChat.id));
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('[Realtime] Chats subscription status:', status);
+      });
+
+    return () => {
+      console.log('[Realtime] Cleaning up subscriptions...');
+      supabase.removeChannel(messagesChannel);
+      supabase.removeChannel(chatsChannel);
+    };
+  }, [session?.user?.id]);
+
   const readCachedChats = (): ChatSession[] => {
     try {
       const saved = localStorage.getItem('lumi_chats_cache');
