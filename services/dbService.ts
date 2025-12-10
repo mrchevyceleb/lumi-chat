@@ -422,10 +422,15 @@ export const dbService = {
 
     console.log(`[DB] Found ${chatsData.length} chat(s)`);
 
+    // Fetch messages for the loaded chats - use high limit to avoid pagination issues
+    // Supabase defaults to 1000 rows which causes messages to be missing!
+    const chatIds = chatsData.map(c => c.id);
     const { data: messagesData, error: msgsError } = await supabase
         .from('messages')
         .select('*')
-        .order('timestamp', { ascending: true });
+        .in('chat_id', chatIds)
+        .order('timestamp', { ascending: true })
+        .limit(50000); // High limit to ensure all messages are fetched
 
     if (msgsError) {
         logError("Error fetching messages", msgsError);
