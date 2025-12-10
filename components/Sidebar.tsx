@@ -318,16 +318,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Separate Chats
   const filteredChats = React.useMemo(() => {
+    console.log('[Sidebar] Total chats received:', chats.length);
     if (!searchQuery.trim()) return chats;
     const query = searchQuery.toLowerCase();
-    return chats.filter(c => 
+    const filtered = chats.filter(c => 
       c.title.toLowerCase().includes(query) || 
       c.messages.some(m => m.content.toLowerCase().includes(query))
     );
+    console.log('[Sidebar] After search filter:', filtered.length, 'query:', searchQuery);
+    return filtered;
   }, [chats, searchQuery]);
 
   const pinnedChats = filteredChats.filter(c => c.isPinned);
   const recentChats = filteredChats.filter(c => !c.folderId && !c.isPinned);
+  
+  console.log('[Sidebar] Pinned:', pinnedChats.length, 'Recent:', recentChats.length, 'Total filtered:', filteredChats.length);
 
   const renderChatList = (chatList: ChatSession[]) => {
     if (chatList.length === 0) return <div className="text-xs text-gray-400 p-2 italic">No chats yet</div>;

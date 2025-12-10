@@ -24,6 +24,9 @@ const App: React.FC = () => {
   // --- Auth State ---
   const [session, setSession] = useState<any>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
+  
+  // Track if we're currently loading data to prevent concurrent loads
+  const isLoadingDataRef = useRef(false);
 
   // --- App State ---
   // Initialize from LocalStorage to prevent "Reloading" flash and provide instant UI
@@ -165,6 +168,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const timer = setTimeout(() => {
         try {
+            console.log('[App] Caching', chats.length, 'chat(s) to localStorage');
             localStorage.setItem('lumi_chats_cache', JSON.stringify(chats));
         } catch(e) { console.warn("Quota exceeded for chat cache"); }
     }, 0);
@@ -311,8 +315,14 @@ const App: React.FC = () => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       console.log('Auth state changed:', event);
       
+      // Skip token refresh and initial session events to prevent duplicate loads
       if (event === 'TOKEN_REFRESHED') {
         console.log('Token refreshed successfully');
+        return;
+      }
+      
+      if (event === 'INITIAL_SESSION') {
+        console.log('Initial session event - skipping to avoid duplicate load');
         return;
       }
       
@@ -333,7 +343,8 @@ const App: React.FC = () => {
       }
 
       setSession(session);
-      if (session) {
+      if (session && event === 'SIGNED_IN') {
+        // Only load data on explicit sign-in, not on every auth state change
         loadUserData();
       }
     });
@@ -473,6 +484,15 @@ const App: React.FC = () => {
   }, [activeChatId]);
 
   const loadUserData = async () => {
+    // Prevent concurrent loads - critical for avoiding race conditions
+    if (isLoadingDataRef.current) {
+      console.log('[App] loadUserData already in progress, skipping...');
+      return;
+    }
+    
+    console.log('[App] Starting loadUserData...');
+    isLoadingDataRef.current = true;
+    
     // Only show loading indicator if we have empty local state
     if (chats.length === 0) setIsLoadingData(true);
     const cachedChats = readCachedChats();
@@ -486,9 +506,14 @@ const App: React.FC = () => {
             dbService.getUserSettings()
         ]);
         
+        console.log(`[App] Loaded ${fetchedChats.length} chat(s) from server`);
+        
         // Merge server data with cached local state to avoid losing unsaved messages
         const { merged, serverMap } = mergeChatsWithCache(cachedChats, fetchedChats);
         const allPersonas = [...INITIAL_PERSONAS, ...fetchedPersonas];
+        
+        console.log(`[App] After merge: ${merged.length} chat(s), ${merged.reduce((acc, c) => acc + c.messages.length, 0)} total messages`);
+        
         setFolders(fetchedFolders);
         setPersonas(allPersonas);
         setChats(merged);
@@ -511,11 +536,15 @@ const App: React.FC = () => {
             setSession(null);
           } else {
             // Retry loading data after recovery
+            isLoadingDataRef.current = false; // Reset before retry
             loadUserData();
+            return; // Exit early since we're retrying
           }
         }
     } finally {
+        isLoadingDataRef.current = false;
         setIsLoadingData(false);
+        console.log('[App] loadUserData complete');
     }
   };
 
@@ -1522,6 +1551,10 @@ const App: React.FC = () => {
                </div>
              ) : (
                <>
+                 {(() => {
+                   console.log(`[App] Rendering activeChat: ${activeChat.id}, messages: ${activeChat.messages.length}`);
+                   return null;
+                 })()}
                  {activeChat.messages.map((msg, idx) => (
                    <MessageBubble key={msg.id} message={msg} isLast={idx === activeChat.messages.length - 1} isTyping={isTyping && idx === activeChat.messages.length - 1 && msg.role === 'model'} />
                  ))}

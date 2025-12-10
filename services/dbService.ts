@@ -302,6 +302,13 @@ export const dbService = {
 
   // --- Folders ---
   async getFolders(): Promise<Folder[]> {
+    // Verify auth before fetching to ensure RLS works properly
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        console.warn('[DB] getFolders called without authenticated user - returning empty array');
+        return [];
+    }
+
     const { data, error } = await supabase.from('folders').select('*').order('created_at', { ascending: true });
     if (error) {
         logError("Error fetching folders", error);
@@ -342,6 +349,13 @@ export const dbService = {
 
   // --- Personas ---
   async getPersonas(): Promise<Persona[]> {
+    // Verify auth before fetching to ensure RLS works properly
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        console.warn('[DB] getPersonas called without authenticated user - returning empty array');
+        return [];
+    }
+
     const { data, error } = await supabase.from('personas').select('*').order('created_at', { ascending: true });
     if (error) {
         logError("Error fetching personas", error);
@@ -383,6 +397,15 @@ export const dbService = {
 
   // --- Chats ---
   async getChats(): Promise<ChatSession[]> {
+    // Critical: Verify auth before fetching to ensure RLS works properly
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        console.warn('[DB] getChats called without authenticated user - returning empty array');
+        return [];
+    }
+
+    console.log(`[DB] Fetching chats for user: ${user.id.slice(0, 8)}...`);
+
     const { data: chatsData, error: chatsError } = await supabase
         .from('chats')
         .select('*')
@@ -392,14 +415,24 @@ export const dbService = {
         logError("Error fetching chats", chatsError);
         throw chatsError;
     }
-    if (!chatsData || chatsData.length === 0) return [];
+    if (!chatsData || chatsData.length === 0) {
+        console.log('[DB] No chats found');
+        return [];
+    }
+
+    console.log(`[DB] Found ${chatsData.length} chat(s)`);
 
     const { data: messagesData, error: msgsError } = await supabase
         .from('messages')
         .select('*')
         .order('timestamp', { ascending: true });
 
-    if (msgsError) logError("Error fetching messages", msgsError);
+    if (msgsError) {
+        logError("Error fetching messages", msgsError);
+        throw msgsError; // Don't continue with empty messages!
+    }
+
+    console.log(`[DB] Found ${messagesData?.length || 0} total message(s) across all chats`);
 
     return chatsData.map(c => {
         const chatMsgs = (messagesData || [])

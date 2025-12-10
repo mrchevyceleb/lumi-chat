@@ -668,10 +668,14 @@ async function handleAnthropic(
   useSearch: boolean,
   meta: { processedFiles: ProcessedFileInfo[]; warnings: string[] }
 ): Promise<Response> {
+  console.log(`🟣 handleAnthropic called with model: ${modelId}`);
+  
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) {
+    console.error("❌ ANTHROPIC_API_KEY not configured!");
     throw new Error("ANTHROPIC_API_KEY not configured");
   }
+  console.log(`✅ ANTHROPIC_API_KEY is configured (length: ${apiKey.length})`);
 
   const anthropic = new Anthropic({ apiKey });
 
@@ -746,6 +750,10 @@ INSTRUCTIONS: Use the memory above to provide a personalized response. If the us
     console.log("Warning: Web search requested but not supported natively by Anthropic");
   }
 
+  console.log(`🚀 Creating Anthropic stream with model: ${actualModelId}`);
+  console.log(`   Message count: ${anthropicMessages.length}`);
+  console.log(`   System instruction length: ${systemInstruction?.length || 0}`);
+
   // Create streaming request
   const stream = await anthropic.messages.stream({
     model: actualModelId,
@@ -753,6 +761,8 @@ INSTRUCTIONS: Use the memory above to provide a personalized response. If the us
     system: systemInstruction,
     messages: anthropicMessages,
   });
+  
+  console.log(`✅ Anthropic stream created successfully`);
 
   // Create SSE stream for client
   const encoder = new TextEncoder();
@@ -762,8 +772,14 @@ INSTRUCTIONS: Use the memory above to provide a personalized response. If the us
       let usage = { input: 0, output: 0 };
 
       try {
+        console.log(`🔄 Starting Anthropic stream processing...`);
+        let chunkCount = 0;
+        
         // Stream chunks from Anthropic
         for await (const chunk of stream) {
+          chunkCount++;
+          console.log(`📦 Received chunk ${chunkCount}: type=${chunk.type}`);
+          
           if (chunk.type === "content_block_delta") {
             if (chunk.delta?.type === "text_delta") {
               fullText += chunk.delta.text;
@@ -783,6 +799,8 @@ INSTRUCTIONS: Use the memory above to provide a personalized response. If the us
             }
           }
         }
+
+        console.log(`✅ Stream complete. Total chunks: ${chunkCount}, Final text length: ${fullText.length}`);
 
         // Send final message
         controller.enqueue(
@@ -856,6 +874,18 @@ serve(async (req) => {
     const mergedTextContexts = [...(textContexts || []), ...contextBlocks];
 
     // Route to appropriate handler based on model
+    console.log(`🔀 Routing request for model: ${modelId}`);
+    console.log(`   isOpenAIModel: ${isOpenAIModel(modelId)}`);
+    console.log(`   isAnthropicModel: ${isAnthropicModel(modelId)}`);
+    
+    if (isOpenAIModel(modelId)) {
+      console.log(`📤 Routing to OpenAI handler`);
+    } else if (isAnthropicModel(modelId)) {
+      console.log(`📤 Routing to Anthropic handler`);
+    } else {
+      console.log(`📤 Routing to Gemini handler (fallback)`);
+    }
+    
     if (isOpenAIModel(modelId)) {
       return await handleOpenAI(
         messages,
