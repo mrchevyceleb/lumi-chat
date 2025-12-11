@@ -25,6 +25,7 @@ export interface ChatSession {
   modelId?: ModelId; // Conversation-specific model selection
   useSearch?: boolean; // Conversation-specific web search toggle
   hasUnsyncedChanges?: boolean; // Local-only updates pending save
+  messagesLoaded?: boolean; // Flag for lazy loading - true when messages have been fetched
 }
 
 export interface Folder {

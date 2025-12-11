@@ -396,6 +396,8 @@ export const dbService = {
   },
 
   // --- Chats ---
+  // LAZY LOADING: Only fetch chat metadata, NOT messages
+  // Messages are fetched on-demand when a chat is selected
   async getChats(): Promise<ChatSession[]> {
     // Critical: Verify auth before fetching to ensure RLS works properly
     const { data: { user } } = await supabase.auth.getUser();
@@ -404,7 +406,7 @@ export const dbService = {
         return [];
     }
 
-    console.log(`[DB] Fetching chats for user: ${user.id.slice(0, 8)}...`);
+    console.log(`[DB] Fetching chat metadata for user: ${user.id.slice(0, 8)}...`);
 
     const { data: chatsData, error: chatsError } = await supabase
         .from('chats')
@@ -420,35 +422,51 @@ export const dbService = {
         return [];
     }
 
-    console.log(`[DB] Found ${chatsData.length} chat(s)`);
+    console.log(`[DB] Found ${chatsData.length} chat(s) (messages will be loaded on-demand)`);
 
-    // Fetch messages for the loaded chats
-    // NOTE: Supabase PostgREST has a max_rows config that defaults to 1000
-    // We need to paginate if users have more than 10000 messages
-    const chatIds = chatsData.map(c => c.id);
-    
-    // Fetch messages in batches (1000 at a time due to Supabase max_rows limit)
-    // NOTE: Supabase Cloud enforces max_rows=1000 on PostgREST API
+    // Return chats WITHOUT messages - they'll be loaded lazily
+    return chatsData.map(c => ({
+        id: c.id,
+        title: c.title,
+        folderId: c.folder_id || undefined,
+        isPinned: c.is_pinned,
+        personaId: c.persona_id,
+        lastUpdated: toTimestamp(c.last_updated),
+        messages: [], // Empty - will be populated on-demand
+        messagesLoaded: false, // Flag to track if messages have been loaded
+        modelId: c.model_id || undefined,
+        useSearch: c.use_search || false
+    }));
+  },
+
+  // LAZY LOADING: Fetch messages for a single chat on-demand
+  async getMessagesForChat(chatId: string): Promise<Message[]> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        console.warn('[DB] getMessagesForChat called without authenticated user');
+        return [];
+    }
+
+    console.log(`[DB] Fetching messages for chat: ${chatId.slice(0, 8)}...`);
+
+    // Fetch all messages for this chat (paginate if needed)
     let allMessages: any[] = [];
     let from = 0;
-    const batchSize = 1000; // Match Supabase's max_rows limit
+    const batchSize = 1000;
     let hasMore = true;
     
     while (hasMore) {
-        console.log(`[DB] Fetching batch: range(${from}, ${from + batchSize - 1})`);
         const { data: batch, error: msgsError } = await supabase
             .from('messages')
             .select('*')
-            .in('chat_id', chatIds)
+            .eq('chat_id', chatId)
             .order('timestamp', { ascending: true })
             .range(from, from + batchSize - 1);
         
         if (msgsError) {
-            logError("Error fetching messages", msgsError);
-            throw msgsError; // Don't continue with empty messages!
+            logError(`Error fetching messages for chat ${chatId}`, msgsError);
+            throw msgsError;
         }
-        
-        console.log(`[DB] Batch ${Math.floor(from / batchSize) + 1} returned ${batch?.length || 0} messages`);
         
         if (!batch || batch.length === 0) {
             hasMore = false;
@@ -456,44 +474,24 @@ export const dbService = {
             allMessages = allMessages.concat(batch);
             from += batchSize;
             
-            // If we got fewer results than batch size, we're done
             if (batch.length < batchSize) {
-                console.log(`[DB] Final batch - total messages: ${allMessages.length}`);
                 hasMore = false;
             }
         }
     }
-    
-    const messagesData = allMessages;
 
-    console.log(`[DB] Fetched ${messagesData?.length || 0} total message(s) across all chats (batch fetching enabled)`);
+    console.log(`[DB] Loaded ${allMessages.length} message(s) for chat ${chatId.slice(0, 8)}...`);
 
-    return chatsData.map(c => {
-        const chatMsgs = (messagesData || [])
-            .filter(m => m.chat_id === c.id)
-            .map(m => ({
-                id: m.id,
-                role: m.role as 'user' | 'model',
-                content: m.content,
-                timestamp: toTimestamp(m.timestamp),
-                type: m.type as 'text' | 'image' | 'audio',
-                groundingUrls: m.grounding_urls,
-                model: m.model,
-                fileMetadata: m.file_metadata || []
-            }));
-
-        return {
-            id: c.id,
-            title: c.title,
-            folderId: c.folder_id || undefined,
-            isPinned: c.is_pinned,
-            personaId: c.persona_id,
-            lastUpdated: toTimestamp(c.last_updated),
-            messages: chatMsgs,
-            modelId: c.model_id || undefined,
-            useSearch: c.use_search || false
-        };
-    });
+    return allMessages.map(m => ({
+        id: m.id,
+        role: m.role as 'user' | 'model',
+        content: m.content,
+        timestamp: toTimestamp(m.timestamp),
+        type: m.type as 'text' | 'image' | 'audio',
+        groundingUrls: m.grounding_urls,
+        model: m.model,
+        fileMetadata: m.file_metadata || []
+    }));
   },
 
   async createChat(chat: ChatSession): Promise<void> {

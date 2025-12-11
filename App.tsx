@@ -62,6 +62,7 @@ const App: React.FC = () => {
     return window.innerWidth >= 768;
   });
   const [isLoadingData, setIsLoadingData] = useState(false);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false); // For lazy loading chat messages
   const UNSYNCED_STORAGE_KEY = 'lumi_unsynced_map';
   const UNSYNCED_CHAT_MARKER = '__chat__';
 
@@ -553,22 +554,22 @@ const App: React.FC = () => {
       const baseChat = serverChat || localChat;
       if (!baseChat) continue;
 
-      const messageMap = new Map<string, Message>();
-      (serverChat?.messages || []).forEach(m => messageMap.set(m.id, m));
-      (localChat?.messages || []).forEach(m => {
-        if (!messageMap.has(m.id)) {
-          messageMap.set(m.id, m);
-        }
-      });
-
-      const messages = Array.from(messageMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+      // With lazy loading: server chats have empty messages, cache may have messages
+      // Prefer cache messages if available (they were loaded previously)
+      const messages = (localChat?.messages && localChat.messages.length > 0) 
+        ? localChat.messages 
+        : (serverChat?.messages || []);
+      
+      // Mark as loaded if cache had messages
+      const messagesLoaded = (localChat?.messages && localChat.messages.length > 0) || localChat?.messagesLoaded || false;
+      
       const lastUpdatedCandidates = [
         serverChat?.lastUpdated || 0,
         localChat?.lastUpdated || 0,
         messages.length ? messages[messages.length - 1].timestamp : 0
       ];
 
-      const hasLocalOnlyMessages = (localChat?.messages || []).some(m => !(serverChat?.messages || []).find(sm => sm.id === m.id));
+      const hasLocalOnlyMessages = (localChat?.messages || []).length > 0 && !(serverChat?.messages || []).length;
       const mergedChat: ChatSession = {
         ...baseChat,
         title: serverChat?.title ?? localChat?.title ?? 'New Conversation',
@@ -578,6 +579,7 @@ const App: React.FC = () => {
         modelId: serverChat?.modelId ?? localChat?.modelId,
         useSearch: serverChat?.useSearch ?? localChat?.useSearch,
         messages,
+        messagesLoaded, // Track if messages have been loaded
         lastUpdated: Math.max(...lastUpdatedCandidates),
         hasUnsyncedChanges: chatHasUnsynced(chatId) || !serverChat || hasLocalOnlyMessages
       };
@@ -626,6 +628,18 @@ const App: React.FC = () => {
       });
     }
   }, [activeChatId]);
+
+  // --- Lazy Load Messages for Active Chat ---
+  // When activeChatId changes OR when chats are loaded, ensure messages are loaded
+  useEffect(() => {
+    if (activeChatId && chats.length > 0) {
+      const chat = chats.find(c => c.id === activeChatId);
+      if (chat && !chat.messagesLoaded && chat.messages.length === 0) {
+        console.log(`[App] Auto-loading messages for active chat: ${activeChatId.slice(0, 8)}...`);
+        loadMessagesForChat(activeChatId);
+      }
+    }
+  }, [activeChatId, chats.length]); // Trigger when active chat changes or chats are loaded
 
   const loadUserData = async () => {
     // Prevent concurrent loads - critical for avoiding race conditions
@@ -854,13 +868,58 @@ const App: React.FC = () => {
     }
   };
 
-  const handleTabClick = (chatId: string) => {
+  const handleTabClick = async (chatId: string) => {
     setActiveChatId(chatId);
+    
+    // Lazy load messages if not already loaded
+    const chat = chats.find(c => c.id === chatId);
+    if (chat && !chat.messagesLoaded && chat.messages.length === 0) {
+      await loadMessagesForChat(chatId);
+    }
   };
 
-  const handleSelectChat = (chatId: string) => {
+  const handleSelectChat = async (chatId: string) => {
     setActiveChatId(chatId);
     setIsSidebarOpen(false); // Close sidebar when selecting a chat
+    
+    // Lazy load messages if not already loaded
+    const chat = chats.find(c => c.id === chatId);
+    if (chat && !chat.messagesLoaded && chat.messages.length === 0) {
+      await loadMessagesForChat(chatId);
+    }
+  };
+  
+  // Lazy load messages for a specific chat
+  const loadMessagesForChat = async (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat || chat.messagesLoaded) {
+      console.log(`[App] Messages already loaded for chat ${chatId.slice(0, 8)}...`);
+      return;
+    }
+    
+    console.log(`[App] Lazy loading messages for chat: ${chatId.slice(0, 8)}...`);
+    setIsLoadingMessages(true);
+    
+    try {
+      const messages = await dbService.getMessagesForChat(chatId);
+      
+      setChats(prev => prev.map(c => {
+        if (c.id === chatId) {
+          return { 
+            ...c, 
+            messages: messages,
+            messagesLoaded: true 
+          };
+        }
+        return c;
+      }));
+      
+      console.log(`[App] Loaded ${messages.length} messages for chat ${chatId.slice(0, 8)}...`);
+    } catch (error) {
+      console.error(`[App] Failed to load messages for chat ${chatId}:`, error);
+    } finally {
+      setIsLoadingMessages(false);
+    }
   };
 
   const handleTabContextMenu = (e: React.MouseEvent, chatId: string) => {
@@ -1702,15 +1761,28 @@ const App: React.FC = () => {
                   <h1 className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-indigo-600 to-pink-500 bg-clip-text text-transparent mb-3 text-center drop-shadow-sm">How can I help you?</h1>
                   <p className="text-gray-500 dark:text-gray-400 text-center max-w-md">I can help you write code, brainstorm ideas, translate languages, and much more.</p>
                </div>
+             ) : isLoadingMessages && activeChat.messages.length === 0 ? (
+               // Loading state while fetching messages
+               <div className="h-full flex flex-col items-center justify-center opacity-80">
+                  <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                  <p className="text-gray-500 dark:text-gray-400 animate-pulse">Loading conversation...</p>
+               </div>
              ) : (
                <>
                  {(() => {
-                   console.log(`[App] Rendering activeChat: ${activeChat.id}, messages: ${activeChat.messages.length}`);
+                   console.log(`[App] Rendering activeChat: ${activeChat.id}, messages: ${activeChat.messages.length}, loaded: ${activeChat.messagesLoaded}`);
                    return null;
                  })()}
-                 {activeChat.messages.map((msg, idx) => (
-                   <MessageBubble key={msg.id} message={msg} isLast={idx === activeChat.messages.length - 1} isTyping={isTyping && idx === activeChat.messages.length - 1 && msg.role === 'model'} />
-                 ))}
+                 {activeChat.messages.length === 0 && !isLoadingMessages ? (
+                   // Empty chat - ready for new message
+                   <div className="h-full flex flex-col items-center justify-center opacity-60 mt-[-50px]">
+                      <p className="text-gray-400 dark:text-gray-500 text-center">Start a new conversation...</p>
+                   </div>
+                 ) : (
+                   activeChat.messages.map((msg, idx) => (
+                     <MessageBubble key={msg.id} message={msg} isLast={idx === activeChat.messages.length - 1} isTyping={isTyping && idx === activeChat.messages.length - 1 && msg.role === 'model'} />
+                   ))
+                 )}
                  <div ref={messagesEndRef} />
                </>
              )}
