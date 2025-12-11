@@ -27,6 +27,12 @@ const App: React.FC = () => {
   
   // Track if we're currently loading data to prevent concurrent loads
   const isLoadingDataRef = useRef(false);
+  
+  // Track which chats are currently loading messages to prevent concurrent loads
+  const loadingMessagesRef = useRef<Set<string>>(new Set());
+  
+  // Track active chat ID for realtime subscription (to avoid stale closures)
+  const activeChatIdRef = useRef<string | null>(null);
 
   // --- App State ---
   // Initialize from LocalStorage to prevent "Reloading" flash and provide instant UI
@@ -46,8 +52,15 @@ const App: React.FC = () => {
   
   // Initialize Active Chat from LocalStorage to persist across reloads
   const [activeChatId, setActiveChatId] = useState<string | null>(() => {
-    return localStorage.getItem('lumi_active_chat');
+    const savedId = localStorage.getItem('lumi_active_chat');
+    activeChatIdRef.current = savedId;
+    return savedId;
   });
+  
+  // Keep ref in sync with state for realtime subscription
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId;
+  }, [activeChatId]);
 
   const [openTabs, setOpenTabs] = useState<string[]>([]); // New: Track open tabs
   const [tabContextMenu, setTabContextMenu] = useState<{
@@ -413,6 +426,24 @@ const App: React.FC = () => {
             const newMsg = payload.new as any;
             
             setChats((prevChats) => {
+              // ONLY update the active chat to avoid unnecessary re-renders
+              // Other chats will load fresh from DB when opened
+              const targetChat = prevChats.find(c => c.id === newMsg.chat_id);
+              if (!targetChat) {
+                return prevChats; // Chat doesn't exist
+              }
+              
+              // Skip if this is not the active chat - it will load fresh when opened
+              if (newMsg.chat_id !== activeChatIdRef.current) {
+                console.log(`[Realtime] Skipping update for inactive chat ${newMsg.chat_id.slice(0, 8)}...`);
+                return prevChats;
+              }
+              
+              // Only update if messages are loaded
+              if (!targetChat.messagesLoaded) {
+                return prevChats;
+              }
+              
               return prevChats.map((chat) => {
                 if (chat.id === newMsg.chat_id) {
                   // Check if message already exists
@@ -448,8 +479,23 @@ const App: React.FC = () => {
             });
           } else if (payload.eventType === 'DELETE') {
             const deletedMsg = payload.old as any;
-            setChats((prevChats) =>
-              prevChats.map((chat) => {
+            setChats((prevChats) => {
+              const targetChat = prevChats.find(c => c.id === deletedMsg.chat_id);
+              if (!targetChat) {
+                return prevChats;
+              }
+              
+              // Skip if not active chat
+              if (deletedMsg.chat_id !== activeChatIdRef.current) {
+                return prevChats;
+              }
+              
+              // Only update if messages are loaded
+              if (!targetChat.messagesLoaded) {
+                return prevChats;
+              }
+              
+              return prevChats.map((chat) => {
                 if (chat.id === deletedMsg.chat_id) {
                   return {
                     ...chat,
@@ -458,8 +504,8 @@ const App: React.FC = () => {
                   };
                 }
                 return chat;
-              })
-            );
+              });
+            });
           }
         }
       )
@@ -560,8 +606,16 @@ const App: React.FC = () => {
         ? localChat.messages 
         : (serverChat?.messages || []);
       
-      // Mark as loaded if cache had messages
-      const messagesLoaded = (localChat?.messages && localChat.messages.length > 0) || localChat?.messagesLoaded || false;
+      // Mark as loaded if:
+      // 1. Local cache explicitly has the flag set, OR
+      // 2. Server chat has the flag set, OR
+      // 3. Cache has messages (they were loaded in a previous session), OR
+      // 4. Server chat has messages (shouldn't happen with lazy loading, but handle it)
+      const messagesLoaded = localChat?.messagesLoaded || 
+                            serverChat?.messagesLoaded || 
+                            (localChat?.messages && localChat.messages.length > 0) ||
+                            (serverChat?.messages && serverChat.messages.length > 0) ||
+                            false;
       
       const lastUpdatedCandidates = [
         serverChat?.lastUpdated || 0,
@@ -630,16 +684,17 @@ const App: React.FC = () => {
   }, [activeChatId]);
 
   // --- Lazy Load Messages for Active Chat ---
-  // When activeChatId changes OR when chats are loaded, ensure messages are loaded
+  // When activeChatId changes, ensure messages are loaded
+  // Note: We only depend on activeChatId to avoid infinite loops from chats updates
   useEffect(() => {
-    if (activeChatId && chats.length > 0) {
-      const chat = chats.find(c => c.id === activeChatId);
-      if (chat && !chat.messagesLoaded && chat.messages.length === 0) {
-        console.log(`[App] Auto-loading messages for active chat: ${activeChatId.slice(0, 8)}...`);
-        loadMessagesForChat(activeChatId);
-      }
+    if (!activeChatId) return;
+    
+    const chat = chats.find(c => c.id === activeChatId);
+    if (chat && !chat.messagesLoaded && chat.messages.length === 0) {
+      console.log(`[App] Auto-loading messages for active chat: ${activeChatId.slice(0, 8)}...`);
+      loadMessagesForChat(activeChatId);
     }
-  }, [activeChatId, chats.length]); // Trigger when active chat changes or chats are loaded
+  }, [activeChatId]); // Only trigger when active chat changes, NOT when chats array updates
 
   const loadUserData = async () => {
     // Prevent concurrent loads - critical for avoiding race conditions
@@ -897,7 +952,14 @@ const App: React.FC = () => {
       return;
     }
     
+    // Prevent concurrent loads of the same chat
+    if (loadingMessagesRef.current.has(chatId)) {
+      console.log(`[App] Already loading messages for chat ${chatId.slice(0, 8)}..., skipping`);
+      return;
+    }
+    
     console.log(`[App] Lazy loading messages for chat: ${chatId.slice(0, 8)}...`);
+    loadingMessagesRef.current.add(chatId);
     setIsLoadingMessages(true);
     
     try {
@@ -918,6 +980,7 @@ const App: React.FC = () => {
     } catch (error) {
       console.error(`[App] Failed to load messages for chat ${chatId}:`, error);
     } finally {
+      loadingMessagesRef.current.delete(chatId);
       setIsLoadingMessages(false);
     }
   };
