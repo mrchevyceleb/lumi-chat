@@ -427,13 +427,15 @@ export const dbService = {
     // We need to paginate if users have more than 10000 messages
     const chatIds = chatsData.map(c => c.id);
     
-    // Fetch messages in batches if needed (10000 at a time to be safe)
+    // Fetch messages in batches (1000 at a time due to Supabase max_rows limit)
+    // NOTE: Supabase Cloud enforces max_rows=1000 on PostgREST API
     let allMessages: any[] = [];
     let from = 0;
-    const batchSize = 10000;
+    const batchSize = 1000; // Match Supabase's max_rows limit
     let hasMore = true;
     
     while (hasMore) {
+        console.log(`[DB] Fetching batch: range(${from}, ${from + batchSize - 1})`);
         const { data: batch, error: msgsError } = await supabase
             .from('messages')
             .select('*')
@@ -446,6 +448,8 @@ export const dbService = {
             throw msgsError; // Don't continue with empty messages!
         }
         
+        console.log(`[DB] Batch ${Math.floor(from / batchSize) + 1} returned ${batch?.length || 0} messages`);
+        
         if (!batch || batch.length === 0) {
             hasMore = false;
         } else {
@@ -454,6 +458,7 @@ export const dbService = {
             
             // If we got fewer results than batch size, we're done
             if (batch.length < batchSize) {
+                console.log(`[DB] Final batch - total messages: ${allMessages.length}`);
                 hasMore = false;
             }
         }
