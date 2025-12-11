@@ -461,7 +461,7 @@ export const dbService = {
     
     const messagesData = allMessages;
 
-    console.log(`[DB] Found ${messagesData?.length || 0} total message(s) across all chats`);
+    console.log(`[DB] Fetched ${messagesData?.length || 0} total message(s) across all chats (batch fetching enabled)`);
 
     return chatsData.map(c => {
         const chatMsgs = (messagesData || [])
