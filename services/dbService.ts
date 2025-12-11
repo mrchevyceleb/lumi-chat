@@ -422,15 +422,45 @@ export const dbService = {
 
     console.log(`[DB] Found ${chatsData.length} chat(s)`);
 
-    // Fetch messages for the loaded chats - use high limit to avoid pagination issues
-    // Supabase defaults to 1000 rows which causes messages to be missing!
+    // Fetch messages for the loaded chats
+    // NOTE: Supabase PostgREST has a max_rows config that defaults to 1000
+    // We need to paginate if users have more than 10000 messages
     const chatIds = chatsData.map(c => c.id);
-    const { data: messagesData, error: msgsError } = await supabase
-        .from('messages')
-        .select('*')
-        .in('chat_id', chatIds)
-        .order('timestamp', { ascending: true })
-        .limit(50000); // High limit to ensure all messages are fetched
+    
+    // Fetch messages in batches if needed (10000 at a time to be safe)
+    let allMessages: any[] = [];
+    let from = 0;
+    const batchSize = 10000;
+    let hasMore = true;
+    
+    while (hasMore) {
+        const { data: batch, error: msgsError } = await supabase
+            .from('messages')
+            .select('*')
+            .in('chat_id', chatIds)
+            .order('timestamp', { ascending: true })
+            .range(from, from + batchSize - 1);
+        
+        if (msgsError) {
+            logError("Error fetching messages", msgsError);
+            throw msgsError; // Don't continue with empty messages!
+        }
+        
+        if (!batch || batch.length === 0) {
+            hasMore = false;
+        } else {
+            allMessages = allMessages.concat(batch);
+            from += batchSize;
+            
+            // If we got fewer results than batch size, we're done
+            if (batch.length < batchSize) {
+                hasMore = false;
+            }
+        }
+    }
+    
+    const messagesData = allMessages;
+
 
     if (msgsError) {
         logError("Error fetching messages", msgsError);

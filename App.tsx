@@ -1632,16 +1632,16 @@ const App: React.FC = () => {
         </div>
 
         {/* Tabs - Hidden on mobile for cleaner UX */}
-        {openTabs.length > 0 && (
+        {(openTabs.length > 0 || activeChatId) && (
           <div className="hidden md:flex items-center gap-1.5 px-3 pt-2 bg-gray-50/50 dark:bg-[#0B1120]/50 border-b border-gray-200 dark:border-white/5 overflow-x-auto custom-scrollbar-hide z-10 h-10 flex-shrink-0">
              {openTabs.map(tabId => {
                const chat = chats.find(c => c.id === tabId);
                if (!chat) return null;
                const isActive = activeChatId === tabId;
                return (
-                 <div 
-                   key={tabId} 
-                   onClick={() => handleTabClick(tabId)} 
+                 <div
+                   key={tabId}
+                   onClick={() => handleTabClick(tabId)}
                    onContextMenu={(e) => handleTabContextMenu(e, tabId)}
                    className={`group relative flex items-center justify-between gap-2 px-3 h-8 min-w-[120px] max-w-[200px] rounded-t-lg cursor-pointer select-none transition-all duration-200 border-t-2 ${isActive ? 'bg-white dark:bg-[#1e293b]/60 text-indigo-600 dark:text-indigo-300 border-indigo-500 shadow-sm z-10 backdrop-blur-sm' : 'bg-transparent text-gray-500 dark:text-gray-400 hover:bg-white/40 dark:hover:bg-white/5 border-transparent hover:text-gray-700 dark:hover:text-gray-200'}`}
                  >
@@ -1653,6 +1653,15 @@ const App: React.FC = () => {
                  </div>
                );
              })}
+             <button
+               onClick={() => createNewChat()}
+               className="flex items-center justify-center px-2 h-8 min-w-[32px] rounded-t-lg cursor-pointer select-none transition-all duration-200 border-t-2 border-transparent text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-white/40 dark:hover:bg-white/5"
+               title="New chat"
+             >
+               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+               </svg>
+             </button>
           </div>
         )}
 
