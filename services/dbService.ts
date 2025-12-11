@@ -461,12 +461,6 @@ export const dbService = {
     
     const messagesData = allMessages;
 
-
-    if (msgsError) {
-        logError("Error fetching messages", msgsError);
-        throw msgsError; // Don't continue with empty messages!
-    }
-
     console.log(`[DB] Found ${messagesData?.length || 0} total message(s) across all chats`);
 
     return chatsData.map(c => {
