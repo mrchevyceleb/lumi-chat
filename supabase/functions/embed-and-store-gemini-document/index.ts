@@ -83,6 +83,7 @@ serve(async (req) => {
     console.log("✅ embed-and-store: Embedding generated, dimension:", embedding.length);
 
     // 2) Insert document with embedding + metadata
+    // Include user_id as a column (not just in metadata) for RLS security
     console.log("💾 embed-and-store: Inserting document into database...");
     const { data, error } = await supabase
       .from("documents")
@@ -90,6 +91,7 @@ serve(async (req) => {
         content: text,
         embedding,
         metadata: metadata || {},
+        user_id: metadata?.user_id || null,
       })
       .select("id")
       .single();
