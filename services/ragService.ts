@@ -19,12 +19,10 @@ function isSimpleFollowUp(message: string, conversationLength: number): boolean 
     ];
     
     if (followUpPatterns.some(pattern => pattern.test(trimmed))) {
-      console.log("🔵 RAG skipped: Simple follow-up detected:", trimmed);
       return true;
     }
   }
   
-  console.log("🔍 RAG: Will fetch context (not a simple follow-up)");
   return false;
 }
 
@@ -40,7 +38,6 @@ export const ragService = {
     try {
       // Don't fetch if message is empty
       if (!userMessage || !userMessage.trim()) {
-        console.log("🔵 RAG skipped: Empty message");
         return "";
       }
 
@@ -54,13 +51,6 @@ export const ragService = {
         ? `[Current conversation topic: ${conversationSummary}] ${userMessage}`
         : userMessage;
 
-      console.log("🔍 RAG: Fetching context for message:", {
-        messageLength: userMessage.length,
-        conversationId,
-        conversationLength,
-        hasSummary: !!conversationSummary
-      });
-
       // Use invoke() as recommended by Supabase to handle CORS and Auth automatically
       const { data, error } = await supabase.functions.invoke('get-rag-context', {
         body: { 
@@ -70,22 +60,18 @@ export const ragService = {
       });
 
       if (error) {
-        console.error("🔴 RAG Context invoke error:", error);
-        console.error("🔴 RAG Error details:", JSON.stringify(error));
+        console.error("🔴 RAG error:", error.message || error);
         return "";
       }
 
-      const contextLength = data?.context?.length || 0;
-      console.log("🟢 RAG Context received:", {
-        length: contextLength,
-        preview: data?.context?.slice(0, 200) || "(empty)",
-        hasContext: contextLength > 0
-      });
+      // Log only if context was found (useful for debugging RAG)
+      if (data?.context) {
+        console.log("🟢 RAG context found:", data.context.length, "chars");
+      }
       
       return data?.context || "";
-    } catch (e) {
-      console.error("🔴 RAG Context exception:", e);
-      console.error("🔴 RAG Exception details:", e);
+    } catch (e: any) {
+      console.error("🔴 RAG exception:", e.message || e);
       return "";
     }
   },
@@ -93,13 +79,6 @@ export const ragService = {
   // Step 2: Save memory to Supabase Vector Store
   async saveMemory(userId: string, conversationId: string, userMessage: string, botResponse: string) {
     try {
-      console.log("💾 RAG: Saving memory...", {
-        userId,
-        conversationId,
-        userMessageLength: userMessage.length,
-        botResponseLength: botResponse.length
-      });
-      
       const { data, error } = await supabase.functions.invoke('embed-and-store-gemini-document', {
         body: {
           text: `User: ${userMessage}\nBot: ${botResponse}`,
@@ -112,13 +91,10 @@ export const ragService = {
       });
       
       if (error) {
-         console.error("🔴 Save memory error:", error);
-         console.error("🔴 Save memory error details:", JSON.stringify(error));
-      } else {
-         console.log("🟢 Memory saved successfully:", data);
+         console.error("🔴 RAG save error:", error.message || error);
       }
-    } catch (e) {
-      console.error("🔴 Save memory exception:", e);
+    } catch (e: any) {
+      console.error("🔴 RAG save exception:", e.message || e);
     }
   }
 };

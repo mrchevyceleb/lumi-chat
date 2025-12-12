@@ -23,13 +23,11 @@ export const attemptSessionRecovery = async (): Promise<boolean> => {
     const { data, error } = await supabase.auth.refreshSession();
     
     if (error || !data.session) {
-      console.warn('Session refresh failed, user needs to re-authenticate');
       // Clear the stale session
       await supabase.auth.signOut();
       return false;
     }
     
-    console.log('Session recovered successfully');
     return true;
   } catch (e) {
     console.error('Session recovery error:', e);

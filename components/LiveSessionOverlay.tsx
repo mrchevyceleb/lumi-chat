@@ -159,11 +159,6 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
     // Only send transcripts if we had an active session
     const hadActiveSession = currentSessionIdRef.current !== "";
     
-    console.log("[Live] Cleanup called, hadActiveSession:", hadActiveSession);
-    console.log("[Live] Current transcripts count:", allTranscriptsRef.current.length);
-    console.log("[Live] Input buffer:", inputTranscriptBuffer.current.slice(0, 100));
-    console.log("[Live] Output buffer:", outputTranscriptBuffer.current.slice(0, 100));
-    
     if (hadActiveSession) {
       // Helper to normalize text: trim and collapse multiple spaces
       const normalizeText = (str: string) => str.trim().replace(/\s+/g, ' ');
@@ -172,22 +167,16 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
       const remainingTranscripts: TranscriptEntry[] = [];
       if (inputTranscriptBuffer.current.trim()) {
         remainingTranscripts.push({ text: normalizeText(inputTranscriptBuffer.current), role: 'user' });
-        console.log("[Live] Adding remaining user transcript");
       }
       if (outputTranscriptBuffer.current.trim()) {
         remainingTranscripts.push({ text: normalizeText(outputTranscriptBuffer.current), role: 'model' });
-        console.log("[Live] Adding remaining model transcript");
       }
       
       // Combine all transcripts and send them when call ends
       const allTranscripts = [...allTranscriptsRef.current, ...remainingTranscripts];
-      console.log("[Live] Total transcripts to send:", allTranscripts.length);
       
       if (allTranscripts.length > 0 && onCallEndRef.current) {
-        console.log("[Live] Calling onCallEnd with transcripts:", allTranscripts.map(t => `[${t.role}]: ${t.text.slice(0, 50)}...`));
         onCallEndRef.current(allTranscripts);
-      } else {
-        console.log("[Live] No transcripts to send or no callback");
       }
     }
     
@@ -403,10 +392,6 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
             
             // --- Transcription Handling (wrapped in try-catch to not break audio) ---
             try {
-                // Log raw message for debugging
-                const msgStr = JSON.stringify(message);
-                console.log("[Live] Message received:", msgStr.slice(0, 1000));
-                
                 // === Handle transcription formats from Gemini Live API ===
                 // PRIORITY: Use dedicated transcription fields ONLY to avoid mixing roles
                 
@@ -415,48 +400,35 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
                 
                 // Format 1: Direct inputAudioTranscription (user speech) - HIGHEST PRIORITY
                 if (message.inputAudioTranscription?.text) {
-                    const text = message.inputAudioTranscription.text;
-                    console.log("[Live] ✓✓ USER INPUT transcription:", text);
-                    // Don't add extra spaces - the API provides properly formatted text
-                    inputTranscriptBuffer.current += text;
+                    inputTranscriptBuffer.current += message.inputAudioTranscription.text;
                     gotUserTranscription = true;
                 }
                 
                 // Format 2: Direct outputAudioTranscription (model speech) - HIGHEST PRIORITY
                 if ((message as any).outputAudioTranscription?.text) {
-                    const text = (message as any).outputAudioTranscription.text;
-                    console.log("[Live] ✓✓ MODEL OUTPUT transcription:", text);
-                    // Don't add extra spaces - the API provides properly formatted text
-                    outputTranscriptBuffer.current += text;
+                    outputTranscriptBuffer.current += (message as any).outputAudioTranscription.text;
                     gotModelTranscription = true;
                 }
                 
                 // Format 3: serverContent.inputTranscription (user speech alternative)
                 if ((message.serverContent as any)?.inputTranscription?.text) {
-                    const text = (message.serverContent as any).inputTranscription.text;
-                    console.log("[Live] ✓✓ SERVER INPUT transcription:", text);
-                    inputTranscriptBuffer.current += text;
+                    inputTranscriptBuffer.current += (message.serverContent as any).inputTranscription.text;
                     gotUserTranscription = true;
                 }
                 
                 // Format 4: serverContent.outputTranscription (model speech alternative)
                 if ((message.serverContent as any)?.outputTranscription?.text) {
-                    const text = (message.serverContent as any).outputTranscription.text;
-                    console.log("[Live] ✓✓ SERVER OUTPUT transcription:", text);
-                    outputTranscriptBuffer.current += text;
+                    outputTranscriptBuffer.current += (message.serverContent as any).outputTranscription.text;
                     gotModelTranscription = true;
                 }
                 
                 // Format 5: Text in serverContent.modelTurn.parts - ONLY use for MODEL output
-                // (and only if we didn't already get outputAudioTranscription)
                 if (!gotModelTranscription) {
                     const parts = message.serverContent?.modelTurn?.parts;
                     if (parts && Array.isArray(parts)) {
                         for (const part of parts) {
                             if ((part as any).text && !(part as any).inlineData) {
-                                const text = (part as any).text;
-                                console.log("[Live] ✓ Model text part (fallback):", text.slice(0, 100));
-                                outputTranscriptBuffer.current += text;
+                                outputTranscriptBuffer.current += (part as any).text;
                             }
                         }
                     }
@@ -467,7 +439,6 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
                     const userParts = (message as any).userContent.parts;
                     for (const part of userParts) {
                         if (part.text) {
-                            console.log("[Live] ✓ User content text:", part.text);
                             inputTranscriptBuffer.current += part.text;
                         }
                     }
@@ -493,10 +464,6 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
             
             // Handle Turn Completion
             if (message.serverContent?.turnComplete) {
-                console.log("[Live] ✓ Turn complete received!");
-                console.log("[Live] Input buffer at turn end:", inputTranscriptBuffer.current.slice(0, 100));
-                console.log("[Live] Output buffer at turn end:", outputTranscriptBuffer.current.slice(0, 100));
-                
                 // Helper to normalize text: trim and collapse multiple spaces
                 const normalizeText = (str: string) => str.trim().replace(/\s+/g, ' ');
                 
@@ -504,20 +471,16 @@ export const LiveSessionOverlay: React.FC<LiveSessionOverlayProps> = ({ isOpen, 
                 // This preserves the conversation order
                 if (inputTranscriptBuffer.current.trim()) {
                      const text = normalizeText(inputTranscriptBuffer.current);
-                     console.log("[Live] Saving USER transcript:", text.slice(0, 50));
                      onTranscriptRef.current?.(text, 'user');
                      allTranscriptsRef.current.push({ text, role: 'user' });
                      inputTranscriptBuffer.current = "";
                 }
                 if (outputTranscriptBuffer.current.trim()) {
                      const text = normalizeText(outputTranscriptBuffer.current);
-                     console.log("[Live] Saving MODEL transcript:", text.slice(0, 50));
                      onTranscriptRef.current?.(text, 'model');
                      allTranscriptsRef.current.push({ text, role: 'model' });
                      outputTranscriptBuffer.current = "";
                 }
-                
-                console.log("[Live] Total transcripts so far:", allTranscriptsRef.current.length);
             }
 
             if (message.serverContent?.interrupted) {

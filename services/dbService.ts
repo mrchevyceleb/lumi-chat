@@ -305,7 +305,6 @@ export const dbService = {
     // Verify auth before fetching to ensure RLS works properly
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-        console.warn('[DB] getFolders called without authenticated user - returning empty array');
         return [];
     }
 
@@ -352,7 +351,6 @@ export const dbService = {
     // Verify auth before fetching to ensure RLS works properly
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-        console.warn('[DB] getPersonas called without authenticated user - returning empty array');
         return [];
     }
 
@@ -402,11 +400,8 @@ export const dbService = {
     // Critical: Verify auth before fetching to ensure RLS works properly
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-        console.warn('[DB] getChats called without authenticated user - returning empty array');
         return [];
     }
-
-    console.log(`[DB] Fetching chat metadata for user: ${user.id.slice(0, 8)}...`);
 
     const { data: chatsData, error: chatsError } = await supabase
         .from('chats')
@@ -418,11 +413,8 @@ export const dbService = {
         throw chatsError;
     }
     if (!chatsData || chatsData.length === 0) {
-        console.log('[DB] No chats found');
         return [];
     }
-
-    console.log(`[DB] Found ${chatsData.length} chat(s) (messages will be loaded on-demand)`);
 
     // Return chats WITHOUT messages - they'll be loaded lazily
     return chatsData.map(c => ({
@@ -443,11 +435,8 @@ export const dbService = {
   async getMessagesForChat(chatId: string): Promise<Message[]> {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-        console.warn('[DB] getMessagesForChat called without authenticated user');
         return [];
     }
-
-    console.log(`[DB] Fetching messages for chat: ${chatId.slice(0, 8)}...`);
 
     // Fetch all messages for this chat (paginate if needed)
     let allMessages: any[] = [];
@@ -480,8 +469,6 @@ export const dbService = {
         }
     }
 
-    console.log(`[DB] Loaded ${allMessages.length} message(s) for chat ${chatId.slice(0, 8)}...`);
-
     return allMessages.map(m => ({
         id: m.id,
         role: m.role as 'user' | 'model',
@@ -512,7 +499,6 @@ export const dbService = {
 
     const { error } = await withAuthRetry(run, `Create chat ${chat.id}`);
     if (error) throw error;
-    console.log('[DB] Chat persisted', { chatId: chat.id, title: chat.title });
   },
 
   async updateChat(chatId: string, updates: Partial<ChatSession>): Promise<void> {
@@ -566,7 +552,6 @@ export const dbService = {
     const run = async () => supabase.from('messages').upsert([messagePayload]);
     const { error } = await withAuthRetry(run, `Add message ${message.id} to chat ${chatId}`);
     if (error) throw error;
-    console.log('[DB] Message persisted', { chatId, messageId: message.id, role: message.role });
   },
   
   async updateMessageContent(messageId: string, content: string, groundingUrls?: any[], fileMetadata?: any[]): Promise<void> {

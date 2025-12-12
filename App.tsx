@@ -182,9 +182,8 @@ const App: React.FC = () => {
   useEffect(() => {
     const timer = setTimeout(() => {
         try {
-            console.log('[App] Caching', chats.length, 'chat(s) to localStorage');
             localStorage.setItem('lumi_chats_cache', JSON.stringify(chats));
-        } catch(e) { console.warn("Quota exceeded for chat cache"); }
+        } catch(e) { /* Quota exceeded */ }
     }, 0);
     return () => clearTimeout(timer);
   }, [chats]);
@@ -301,7 +300,6 @@ const App: React.FC = () => {
         
         // If there's a session error or the session is invalid, try to recover
         if (error || !session) {
-          console.log('No valid session found, checking for recoverable session...');
           const recovered = await attemptSessionRecovery();
           if (recovered) {
             const { data: { session: newSession } } = await supabase.auth.getSession();
@@ -327,16 +325,8 @@ const App: React.FC = () => {
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log('Auth state changed:', event);
-      
       // Skip token refresh and initial session events to prevent duplicate loads
-      if (event === 'TOKEN_REFRESHED') {
-        console.log('Token refreshed successfully');
-        return;
-      }
-      
-      if (event === 'INITIAL_SESSION') {
-        console.log('Initial session event - skipping to avoid duplicate load');
+      if (event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
         return;
       }
       
@@ -368,7 +358,6 @@ const App: React.FC = () => {
       const { data: { session: currentSession } } = await supabase.auth.getSession();
       if (!currentSession && session) {
         // Session expired, try to recover
-        console.log('Session expired during use, attempting recovery...');
         const recovered = await attemptSessionRecovery();
         if (!recovered) {
           setSession(null);
@@ -406,8 +395,6 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!session?.user?.id) return;
 
-    console.log('[Realtime] Setting up subscriptions...');
-
     // Subscribe to messages for real-time sync
     const messagesChannel = supabase
       .channel('messages-changes')
@@ -420,7 +407,6 @@ const App: React.FC = () => {
           filter: `user_id=eq.${session.user.id}`,
         },
         (payload) => {
-          console.log('[Realtime] Message change detected:', payload.eventType, payload.new);
           
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const newMsg = payload.new as any;
@@ -435,7 +421,6 @@ const App: React.FC = () => {
               
               // Skip if this is not the active chat - it will load fresh when opened
               if (newMsg.chat_id !== activeChatIdRef.current) {
-                console.log(`[Realtime] Skipping update for inactive chat ${newMsg.chat_id.slice(0, 8)}...`);
                 return prevChats;
               }
               
@@ -509,9 +494,7 @@ const App: React.FC = () => {
           }
         }
       )
-      .subscribe((status) => {
-        console.log('[Realtime] Messages subscription status:', status);
-      });
+      .subscribe();
 
     // Subscribe to chats for real-time sync
     const chatsChannel = supabase
@@ -525,7 +508,6 @@ const App: React.FC = () => {
           filter: `user_id=eq.${session.user.id}`,
         },
         (payload) => {
-          console.log('[Realtime] Chat change detected:', payload.eventType);
           
           if (payload.eventType === 'INSERT') {
             const newChat = payload.new as any;
@@ -568,12 +550,9 @@ const App: React.FC = () => {
           }
         }
       )
-      .subscribe((status) => {
-        console.log('[Realtime] Chats subscription status:', status);
-      });
+      .subscribe();
 
     return () => {
-      console.log('[Realtime] Cleaning up subscriptions...');
       supabase.removeChannel(messagesChannel);
       supabase.removeChannel(chatsChannel);
     };
@@ -691,7 +670,6 @@ const App: React.FC = () => {
     
     const chat = chats.find(c => c.id === activeChatId);
     if (chat && !chat.messagesLoaded && chat.messages.length === 0) {
-      console.log(`[App] Auto-loading messages for active chat: ${activeChatId.slice(0, 8)}...`);
       loadMessagesForChat(activeChatId);
     }
   }, [activeChatId]); // Only trigger when active chat changes, NOT when chats array updates
@@ -699,11 +677,9 @@ const App: React.FC = () => {
   const loadUserData = async () => {
     // Prevent concurrent loads - critical for avoiding race conditions
     if (isLoadingDataRef.current) {
-      console.log('[App] loadUserData already in progress, skipping...');
       return;
     }
     
-    console.log('[App] Starting loadUserData...');
     isLoadingDataRef.current = true;
     
     // Only show loading indicator if we have empty local state
@@ -719,13 +695,9 @@ const App: React.FC = () => {
             dbService.getUserSettings()
         ]);
         
-        console.log(`[App] Loaded ${fetchedChats.length} chat(s) from server`);
-        
         // Merge server data with cached local state to avoid losing unsaved messages
         const { merged, serverMap } = mergeChatsWithCache(cachedChats, fetchedChats);
         const allPersonas = [...INITIAL_PERSONAS, ...fetchedPersonas];
-        
-        console.log(`[App] After merge: ${merged.length} chat(s), ${merged.reduce((acc, c) => acc + c.messages.length, 0)} total messages`);
         
         setFolders(fetchedFolders);
         setPersonas(allPersonas);
@@ -757,7 +729,6 @@ const App: React.FC = () => {
     } finally {
         isLoadingDataRef.current = false;
         setIsLoadingData(false);
-        console.log('[App] loadUserData complete');
     }
   };
 
@@ -948,17 +919,14 @@ const App: React.FC = () => {
   const loadMessagesForChat = async (chatId: string) => {
     const chat = chats.find(c => c.id === chatId);
     if (!chat || chat.messagesLoaded) {
-      console.log(`[App] Messages already loaded for chat ${chatId.slice(0, 8)}...`);
       return;
     }
     
     // Prevent concurrent loads of the same chat
     if (loadingMessagesRef.current.has(chatId)) {
-      console.log(`[App] Already loading messages for chat ${chatId.slice(0, 8)}..., skipping`);
       return;
     }
     
-    console.log(`[App] Lazy loading messages for chat: ${chatId.slice(0, 8)}...`);
     loadingMessagesRef.current.add(chatId);
     setIsLoadingMessages(true);
     
@@ -975,8 +943,6 @@ const App: React.FC = () => {
         }
         return c;
       }));
-      
-      console.log(`[App] Loaded ${messages.length} messages for chat ${chatId.slice(0, 8)}...`);
     } catch (error) {
       console.error(`[App] Failed to load messages for chat ${chatId}:`, error);
     } finally {
@@ -1045,7 +1011,6 @@ const App: React.FC = () => {
         activeChat?.messages.length || 0
       );
       setLiveRagContext(context);
-      console.log("[Voice] Fetched RAG context for live session:", context.slice(0, 100) + "...");
     } catch (e) {
       console.warn("[Voice] Failed to fetch RAG context:", e);
       setLiveRagContext("");
@@ -1066,7 +1031,6 @@ const App: React.FC = () => {
 
   // --- NEW: Handle Live Transcript ---
   const handleLiveTranscript = async (content: string, role: 'user' | 'model') => {
-    console.log(`[Voice] handleLiveTranscript called - Role: ${role}, Content: ${content.slice(0, 50)}...`);
     if (!content.trim()) return;
 
     let chatId = activeChatId;
@@ -1123,15 +1087,8 @@ const App: React.FC = () => {
   // --- Handle Call End: Send all transcripts to chat and save to RAG ---
   const handleCallEnd = async (transcripts: Array<{ text: string; role: 'user' | 'model' }>) => {
     if (!transcripts || transcripts.length === 0) {
-      console.log("[Voice] No transcripts to save");
       return;
     }
-
-    console.log("[Voice] Processing call end with", transcripts.length, "transcripts");
-    console.log("[Voice] Transcripts breakdown:");
-    transcripts.forEach((t, i) => {
-      console.log(`  [${i}] Role: ${t.role}, Text: ${t.text.slice(0, 60)}...`);
-    });
 
     let chatId = activeChatId;
     let currentChatList = [...chats];
@@ -1156,7 +1113,6 @@ const App: React.FC = () => {
        isNewChat = true;
        setIsSidebarOpen(false);
        await dbService.createChat(newChat);
-       console.log("[Voice] Created new chat for voice session:", chatId);
     }
 
     // Get current chat to check for existing messages
@@ -1175,11 +1131,8 @@ const App: React.FC = () => {
       }));
 
     if (messagesToAdd.length === 0) {
-      console.log("[Voice] No valid messages to add");
       return;
     }
-
-    console.log("[Voice] Adding", messagesToAdd.length, "messages to chat");
 
     // Add all messages to the chat
     setChats(prev => prev.map(c => {
@@ -1227,11 +1180,7 @@ const App: React.FC = () => {
             chatId!, 
             userMsg || "[Voice interaction]", 
             modelMsg || "[Voice response]"
-          ).then(() => {
-            console.log("[Voice] Saved voice exchange to RAG memory");
-          }).catch(err => {
-            console.warn("[Voice] Failed to save to RAG:", err);
-          });
+          ).catch(() => { /* Silent fail for background save */ });
         }
       }
     }
@@ -1380,20 +1329,7 @@ const App: React.FC = () => {
        }
        
        const conversationLength = updatedChat?.messages.length || 0;
-       console.log("📝 App: Requesting RAG context...", {
-         chatId,
-         conversationLength,
-         hasConversationSummary: !!conversationSummary,
-         messagePreview: text.slice(0, 50)
-       });
-       
        ragContext = await ragService.getRagContext(text, chatId!, conversationSummary, conversationLength);
-       
-       console.log("📝 App: RAG context retrieved:", {
-         hasContext: !!ragContext,
-         contextLength: ragContext.length,
-         contextPreview: ragContext.slice(0, 150)
-       });
     }
 
     // 2. Title Gen - use AI-only title (no persona prefix)
@@ -1832,10 +1768,6 @@ const App: React.FC = () => {
                </div>
              ) : (
                <>
-                 {(() => {
-                   console.log(`[App] Rendering activeChat: ${activeChat.id}, messages: ${activeChat.messages.length}, loaded: ${activeChat.messagesLoaded}`);
-                   return null;
-                 })()}
                  {activeChat.messages.length === 0 && !isLoadingMessages ? (
                    // Empty chat - ready for new message
                    <div className="h-full flex flex-col items-center justify-center opacity-60 mt-[-50px]">

@@ -150,9 +150,7 @@ function getContextWindow(messages: Message[], modelId: string): Message[] {
   }
   
   // Log truncation for debugging
-  if (selectedMessages.length < messages.length) {
-    console.log(`📝 Context window (${modelId}): Using ${selectedMessages.length}/${messages.length} messages (~${Math.round(totalChars/4)} tokens)`);
-  }
+  // Context window trimmed if needed (logged silently)
   
   return selectedMessages;
 }
