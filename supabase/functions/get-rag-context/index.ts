@@ -162,8 +162,8 @@ serve(async (req) => {
         "match_documents",
         {
           query_embedding: queryEmbedding,
-          match_threshold: 0.6, // Higher threshold for other conversations
-          match_count: 3,
+          match_threshold: 0.35, // Lower threshold to catch more relevant memories
+          match_count: 10, // Get more results so important memories aren't missed
           filter: otherConvoFilter,
         }
       );
