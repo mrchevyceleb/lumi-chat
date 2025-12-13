@@ -86,7 +86,7 @@ const MODEL_CONTEXT_CONFIGS: Record<string, { maxMessages: number; maxContextCha
   'o1-mini': { maxMessages: 12, maxContextChars: 20000, minRecentMessages: 4 },
   'gemini-3-pro-preview': { maxMessages: 14, maxContextChars: 24000, minRecentMessages: 6 },
   'gemini-3.0-pro': { maxMessages: 14, maxContextChars: 24000, minRecentMessages: 6 }, // alias for compatibility
-  'gpt-5.1': { maxMessages: 16, maxContextChars: 28000, minRecentMessages: 6 },
+  'gpt-5.2': { maxMessages: 16, maxContextChars: 28000, minRecentMessages: 6 },
   'claude-opus-4-5': { maxMessages: 12, maxContextChars: 20000, minRecentMessages: 4 }, // Premium - most expensive
   // Standard models - balanced context
   'gpt-5-mini': { maxMessages: 20, maxContextChars: 32000, minRecentMessages: 6 },

@@ -51,7 +51,7 @@ function mapModelId(modelId: string): string {
     "gemini-3.0-pro": "gemini-3-pro-preview", // alias to correct preview model
     "gemini-flash-lite-latest": "gemini-2.0-flash-lite",
     // OpenAI GPT-5 models - use exact API names
-    "gpt-5.1": "gpt-5.1",
+    "gpt-5.2": "gpt-5.2-2025-12-11",
     "gpt-5-mini": "gpt-5-mini",
     "gpt-5-nano": "gpt-5-nano",
     // o1 models use exact strings

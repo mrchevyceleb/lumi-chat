@@ -97,7 +97,7 @@ export const CODING_PERSONA: Persona = {
 };
 
 // Keep gemini-3.0-pro in the union for backward compatibility, but primary is gemini-3-pro-preview
-export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-3.0-pro' | 'gemini-flash-lite-latest' | 'gpt-5.1' | 'gpt-5-mini' | 'gpt-5-nano' | 'o1' | 'o1-mini' | 'claude-haiku-4-5' | 'claude-sonnet-4-5' | 'claude-opus-4-5';
+export type ModelId = 'gemini-2.5-flash' | 'gemini-3-pro-preview' | 'gemini-3.0-pro' | 'gemini-flash-lite-latest' | 'gpt-5.2' | 'gpt-5-mini' | 'gpt-5-nano' | 'o1' | 'o1-mini' | 'claude-haiku-4-5' | 'claude-sonnet-4-5' | 'claude-opus-4-5';
 
 export interface ModelConfig {
   id: ModelId;
@@ -152,12 +152,12 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     costInput: 1.10, 
     costOutput: 4.40 
   },
-  { 
-    id: 'gpt-5.1', 
-    name: 'GPT-5.1', 
-    description: 'Flagship coding & reasoning.', 
-    costInput: 1.25, 
-    costOutput: 10.00 
+  {
+    id: 'gpt-5.2',
+    name: 'GPT-5.2',
+    description: 'Flagship coding & reasoning.',
+    costInput: 1.75,
+    costOutput: 14.00
   },
   // Premium Tier - High capability
   { 
