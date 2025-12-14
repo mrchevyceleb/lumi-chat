@@ -1,5 +1,5 @@
 
-const CACHE_VERSION = 'v7';
+const CACHE_VERSION = 'v8';
 const APP_SHELL_CACHE = `lumi-chat-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `lumi-chat-runtime-${CACHE_VERSION}`;
 const APP_SHELL = [

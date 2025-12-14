@@ -391,9 +391,65 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // --- PWA Visibility & Network Refresh for Cross-Device Sync ---
+  // When the PWA comes to foreground or network is restored, refresh data
+  useEffect(() => {
+    if (!session?.user?.id) return;
+
+    // Track last refresh to avoid excessive API calls
+    let lastRefreshTime = Date.now();
+    const MIN_REFRESH_INTERVAL = 5000; // 5 seconds minimum between refreshes
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const now = Date.now();
+        // Only refresh if enough time has passed since last refresh
+        if (now - lastRefreshTime > MIN_REFRESH_INTERVAL) {
+          console.log('[App] PWA became visible, refreshing data...');
+          lastRefreshTime = now;
+          loadUserData();
+        }
+      }
+    };
+
+    const handleOnline = () => {
+      const now = Date.now();
+      if (now - lastRefreshTime > MIN_REFRESH_INTERVAL) {
+        console.log('[App] Network restored, refreshing data...');
+        lastRefreshTime = now;
+        loadUserData();
+      }
+    };
+
+    const handleFocus = () => {
+      const now = Date.now();
+      // Slightly longer interval for focus events to avoid double-triggering with visibility
+      if (now - lastRefreshTime > MIN_REFRESH_INTERVAL * 2) {
+        console.log('[App] Window focused, refreshing data...');
+        lastRefreshTime = now;
+        loadUserData();
+      }
+    };
+
+    // Add event listeners
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [session?.user?.id]);
+
   // --- Real-time Subscription for Cross-Device Sync ---
   useEffect(() => {
     if (!session?.user?.id) return;
+
+    // Track subscription status for reconnection
+    let messagesChannelStatus: string = 'CLOSED';
+    let chatsChannelStatus: string = 'CLOSED';
 
     // Subscribe to messages for real-time sync
     const messagesChannel = supabase
@@ -407,10 +463,10 @@ const App: React.FC = () => {
           filter: `user_id=eq.${session.user.id}`,
         },
         (payload) => {
-          
+
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const newMsg = payload.new as any;
-            
+
             setChats((prevChats) => {
               // ONLY update the active chat to avoid unnecessary re-renders
               // Other chats will load fresh from DB when opened
@@ -418,22 +474,22 @@ const App: React.FC = () => {
               if (!targetChat) {
                 return prevChats; // Chat doesn't exist
               }
-              
+
               // Skip if this is not the active chat - it will load fresh when opened
               if (newMsg.chat_id !== activeChatIdRef.current) {
                 return prevChats;
               }
-              
+
               // Only update if messages are loaded
               if (!targetChat.messagesLoaded) {
                 return prevChats;
               }
-              
+
               return prevChats.map((chat) => {
                 if (chat.id === newMsg.chat_id) {
                   // Check if message already exists
                   const existingMsgIndex = chat.messages.findIndex(m => m.id === newMsg.id);
-                  
+
                   const message = {
                     id: newMsg.id,
                     role: newMsg.role as 'user' | 'model',
@@ -444,7 +500,7 @@ const App: React.FC = () => {
                     model: newMsg.model,
                     fileMetadata: newMsg.file_metadata || [],
                   };
-                  
+
                   if (existingMsgIndex !== -1) {
                     // Update existing message
                     const updatedMessages = [...chat.messages];
@@ -469,17 +525,17 @@ const App: React.FC = () => {
               if (!targetChat) {
                 return prevChats;
               }
-              
+
               // Skip if not active chat
               if (deletedMsg.chat_id !== activeChatIdRef.current) {
                 return prevChats;
               }
-              
+
               // Only update if messages are loaded
               if (!targetChat.messagesLoaded) {
                 return prevChats;
               }
-              
+
               return prevChats.map((chat) => {
                 if (chat.id === deletedMsg.chat_id) {
                   return {
@@ -494,7 +550,10 @@ const App: React.FC = () => {
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        messagesChannelStatus = status;
+        console.log('[Realtime] Messages subscription status:', status);
+      });
 
     // Subscribe to chats for real-time sync
     const chatsChannel = supabase
@@ -508,7 +567,7 @@ const App: React.FC = () => {
           filter: `user_id=eq.${session.user.id}`,
         },
         (payload) => {
-          
+
           if (payload.eventType === 'INSERT') {
             const newChat = payload.new as any;
             const chat: ChatSession = {
@@ -522,7 +581,7 @@ const App: React.FC = () => {
               modelId: newChat.model_id || undefined,
               useSearch: newChat.use_search || false,
             };
-            
+
             setChats((prevChats) => {
               if (prevChats.find(c => c.id === chat.id)) return prevChats;
               return [chat, ...prevChats];
@@ -550,9 +609,35 @@ const App: React.FC = () => {
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        chatsChannelStatus = status;
+        console.log('[Realtime] Chats subscription status:', status);
+      });
+
+    // Handle visibility change to reconnect stale subscriptions
+    // Mobile PWAs can lose WebSocket connections when backgrounded
+    const handleVisibilityForRealtime = () => {
+      if (document.visibilityState === 'visible') {
+        // Check if subscriptions need to be re-established
+        if (messagesChannelStatus !== 'SUBSCRIBED' || chatsChannelStatus !== 'SUBSCRIBED') {
+          console.log('[Realtime] Reconnecting stale subscriptions...');
+          // Unsubscribe and resubscribe to force reconnection
+          messagesChannel.subscribe((status) => {
+            messagesChannelStatus = status;
+            console.log('[Realtime] Messages reconnected:', status);
+          });
+          chatsChannel.subscribe((status) => {
+            chatsChannelStatus = status;
+            console.log('[Realtime] Chats reconnected:', status);
+          });
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityForRealtime);
 
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityForRealtime);
       supabase.removeChannel(messagesChannel);
       supabase.removeChannel(chatsChannel);
     };
