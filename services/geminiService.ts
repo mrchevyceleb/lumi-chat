@@ -236,18 +236,43 @@ export const streamChatResponse = async (
       throw new Error(error.error || 'Chat request failed');
     }
 
-    // Handle SSE stream
+    // Handle SSE stream with timeouts to prevent PWA from hanging
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body');
 
     const decoder = new TextDecoder();
     let buffer = '';
 
+    // Timeout between chunks (30 seconds) - if no data received, assume stream is dead
+    const CHUNK_TIMEOUT_MS = 30000;
+    // Total stream timeout (5 minutes) - prevent runaway streams
+    const TOTAL_TIMEOUT_MS = 300000;
+    const streamStartTime = Date.now();
+
     while (true) {
       if (signal?.aborted) break;
 
-      const { done, value } = await reader.read();
-      if (done) break;
+      // Check total timeout
+      if (Date.now() - streamStartTime > TOTAL_TIMEOUT_MS) {
+        console.warn('[Gemini] Total stream timeout exceeded, ending stream');
+        break;
+      }
+
+      // Read with chunk timeout
+      const readPromise = reader.read();
+      const timeoutPromise = new Promise<{ done: boolean; value: undefined }>((resolve) => {
+        setTimeout(() => resolve({ done: true, value: undefined }), CHUNK_TIMEOUT_MS);
+      });
+
+      const { done, value } = await Promise.race([readPromise, timeoutPromise]);
+
+      if (done) {
+        if (!value) {
+          // Timeout case - no data received within timeout
+          console.warn('[Gemini] Stream chunk timeout, assuming complete');
+        }
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
 

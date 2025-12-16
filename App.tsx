@@ -34,6 +34,10 @@ const App: React.FC = () => {
   // Track active chat ID for realtime subscription (to avoid stale closures)
   const activeChatIdRef = useRef<string | null>(null);
 
+  // Queue for realtime messages that arrive for chats not yet loaded
+  // These will be applied when the chat is opened and messages are loaded
+  const pendingRealtimeMessagesRef = useRef<Map<string, any[]>>(new Map());
+
   // --- App State ---
   // Initialize from LocalStorage to prevent "Reloading" flash and provide instant UI
   const [chats, setChats] = useState<ChatSession[]>(() => {
@@ -93,6 +97,11 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('lumi_dark_mode');
     return saved === 'true';
   });
+
+  // Network Status - for detecting online/offline state (important for PWA)
+  const [isOnline, setIsOnline] = useState(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
 
   // Voice & Model State (Settings)
   const initialDefaultModel = (() => {
@@ -423,9 +432,17 @@ const App: React.FC = () => {
               if (newMsg.chat_id !== activeChatIdRef.current) {
                 return prevChats;
               }
-              
-              // Only update if messages are loaded
+
+              // Queue messages for chats that haven't loaded messages yet
+              // They'll be applied when the chat is opened via loadMessagesForChat
               if (!targetChat.messagesLoaded) {
+                const pending = pendingRealtimeMessagesRef.current.get(newMsg.chat_id) || [];
+                // Only queue if not already in queue
+                if (!pending.some(p => p.id === newMsg.id)) {
+                  pending.push(newMsg);
+                  pendingRealtimeMessagesRef.current.set(newMsg.chat_id, pending);
+                  console.log(`[Realtime] Queued message ${newMsg.id} for unloaded chat ${newMsg.chat_id}`);
+                }
                 return prevChats;
               }
               
@@ -494,7 +511,17 @@ const App: React.FC = () => {
           }
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        console.log(`[Realtime] Messages subscription status: ${status}`);
+        if (status === 'SUBSCRIBED') {
+          console.log('[Realtime] Messages channel connected');
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error('[Realtime] Messages subscription error:', err);
+          // Channel will auto-reconnect, but log for debugging
+        } else if (status === 'CLOSED') {
+          console.log('[Realtime] Messages channel closed');
+        }
+      });
 
     // Subscribe to chats for real-time sync
     const chatsChannel = supabase
@@ -550,7 +577,17 @@ const App: React.FC = () => {
           }
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        console.log(`[Realtime] Chats subscription status: ${status}`);
+        if (status === 'SUBSCRIBED') {
+          console.log('[Realtime] Chats channel connected');
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error('[Realtime] Chats subscription error:', err);
+          // Channel will auto-reconnect, but log for debugging
+        } else if (status === 'CLOSED') {
+          console.log('[Realtime] Chats channel closed');
+        }
+      });
 
     return () => {
       supabase.removeChannel(messagesChannel);
@@ -624,9 +661,20 @@ const App: React.FC = () => {
     return { merged, serverMap };
   };
 
+  // Track retry counts for failed reconciliations
+  const syncRetriesRef = useRef<Map<string, number>>(new Map());
+  const MAX_SYNC_RETRIES = 3;
+
   const reconcileUnsynced = async (mergedChats: ChatSession[], serverMap: Map<string, ChatSession>) => {
     for (const chat of mergedChats) {
       if (!chat.hasUnsyncedChanges) continue;
+
+      const retryCount = syncRetriesRef.current.get(chat.id) || 0;
+      if (retryCount >= MAX_SYNC_RETRIES) {
+        console.warn(`[Sync] Max retries (${MAX_SYNC_RETRIES}) reached for chat ${chat.id}, skipping`);
+        continue;
+      }
+
       const serverChat = serverMap.get(chat.id);
       const serverMessageIds = new Set(serverChat?.messages.map(m => m.id) || []);
 
@@ -640,17 +688,69 @@ const App: React.FC = () => {
         const missingMessages = chat.messages.filter(m => !serverMessageIds.has(m.id));
         if (missingMessages.length > 0) {
           markUnsynced(chat.id, missingMessages.map(m => m.id));
+          // Sync each message individually so partial success is preserved
           for (const msg of missingMessages) {
-            await dbService.addMessage(chat.id, msg);
+            try {
+              await dbService.addMessage(chat.id, msg);
+              clearUnsynced(chat.id, [msg.id]);
+            } catch (msgError) {
+              console.warn(`[Sync] Failed to sync message ${msg.id}:`, msgError);
+              // Continue with other messages instead of failing all
+            }
           }
-          clearUnsynced(chat.id, missingMessages.map(m => m.id));
         }
+
+        // Success - reset retry counter
+        syncRetriesRef.current.delete(chat.id);
+        console.log(`[Sync] Successfully reconciled chat ${chat.id}`);
       } catch (e) {
-        console.warn('Reconciliation failed for chat', chat.id, e);
+        console.warn(`[Sync] Reconciliation failed for chat ${chat.id} (attempt ${retryCount + 1}):`, e);
+        syncRetriesRef.current.set(chat.id, retryCount + 1);
+
+        // Schedule retry with exponential backoff
+        const backoffMs = Math.min(1000 * Math.pow(2, retryCount), 30000);
+        console.log(`[Sync] Will retry chat ${chat.id} in ${backoffMs}ms`);
+        setTimeout(() => {
+          reconcileUnsynced([chat], serverMap);
+        }, backoffMs);
       }
     }
   };
 
+
+  // --- Network Status Detection ---
+  // Detect when device goes online/offline for better PWA handling
+  useEffect(() => {
+    const handleOnline = () => {
+      console.log('[App] Network reconnected');
+      setIsOnline(true);
+
+      // When coming back online, attempt to sync any pending changes
+      if (session) {
+        const cachedChats = readCachedChats();
+        const unsyncedChats = cachedChats.filter(c => c.hasUnsyncedChanges);
+        if (unsyncedChats.length > 0) {
+          console.log(`[App] Re-syncing ${unsyncedChats.length} chats after reconnect`);
+          // Reset retry counters for a fresh attempt
+          syncRetriesRef.current.clear();
+          reconcileUnsynced(unsyncedChats, new Map());
+        }
+      }
+    };
+
+    const handleOffline = () => {
+      console.log('[App] Network disconnected');
+      setIsOnline(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [session]);
 
   // --- Tab Management Effect ---
   useEffect(() => {
@@ -931,14 +1031,40 @@ const App: React.FC = () => {
     setIsLoadingMessages(true);
     
     try {
-      const messages = await dbService.getMessagesForChat(chatId);
-      
+      let messages = await dbService.getMessagesForChat(chatId);
+
+      // Apply any queued realtime messages that arrived before loading completed
+      const pendingMessages = pendingRealtimeMessagesRef.current.get(chatId);
+      if (pendingMessages && pendingMessages.length > 0) {
+        console.log(`[App] Applying ${pendingMessages.length} queued realtime messages to chat ${chatId}`);
+
+        const existingIds = new Set(messages.map(m => m.id));
+        for (const pending of pendingMessages) {
+          if (!existingIds.has(pending.id)) {
+            messages.push({
+              id: pending.id,
+              role: pending.role as 'user' | 'model',
+              content: pending.content,
+              timestamp: pending.timestamp,
+              type: pending.type as 'text' | 'image' | 'audio',
+              groundingUrls: pending.grounding_urls,
+              model: pending.model,
+              fileMetadata: pending.file_metadata || [],
+            });
+          }
+        }
+        // Sort by timestamp
+        messages.sort((a, b) => a.timestamp - b.timestamp);
+        // Clear the queue
+        pendingRealtimeMessagesRef.current.delete(chatId);
+      }
+
       setChats(prev => prev.map(c => {
         if (c.id === chatId) {
-          return { 
-            ...c, 
+          return {
+            ...c,
             messages: messages,
-            messagesLoaded: true 
+            messagesLoaded: true
           };
         }
         return c;
@@ -1227,17 +1353,26 @@ const App: React.FC = () => {
         lastUpdated: Date.now()
       };
       chatId = newChat.id;
-      currentChatList = [newChat, ...chats];
-      setActiveChatId(chatId);
       isNewChat = true;
-      setIsSidebarOpen(false); // Close sidebar when starting new chat
+
+      // CRITICAL: Create chat in DB BEFORE updating local state
+      // This ensures the chat exists for cross-device sync via realtime
       markUnsynced(newChat.id, [UNSYNCED_CHAT_MARKER]);
       try {
-        await dbService.createChat(newChat); 
+        await dbService.createChat(newChat);
         clearUnsynced(newChat.id, [UNSYNCED_CHAT_MARKER]);
       } catch (e) {
-        console.error("Failed to persist new chat", e);
+        console.error("[App] Failed to create chat in DB:", e);
+        // ABORT: Don't proceed with orphaned messages that won't sync
+        setIsTyping(false);
+        return;
       }
+
+      // Only update local state AFTER successful DB creation
+      currentChatList = [newChat, ...chats];
+      setChats(currentChatList);
+      setActiveChatId(chatId);
+      setIsSidebarOpen(false); // Close sidebar when starting new chat
     }
 
     const chatBeforeUpdate = chats.find(c => c.id === chatId);

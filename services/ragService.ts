@@ -1,6 +1,19 @@
 
 import { supabase } from './supabaseClient';
 
+// Timeout for RAG operations to prevent PWA from hanging indefinitely
+const RAG_TIMEOUT_MS = 10000; // 10 seconds
+
+/**
+ * Wraps a promise with a timeout. Returns the promise result or throws on timeout.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, errorMessage: string): Promise<T> {
+  const timeout = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error(errorMessage)), ms);
+  });
+  return Promise.race([promise, timeout]);
+}
+
 /**
  * Checks if a message is likely a simple follow-up that doesn't need RAG.
  * This saves API calls for conversational messages.
@@ -51,13 +64,18 @@ export const ragService = {
         ? `[Current conversation topic: ${conversationSummary}] ${userMessage}`
         : userMessage;
 
-      // Use invoke() as recommended by Supabase to handle CORS and Auth automatically
-      const { data, error } = await supabase.functions.invoke('get-rag-context', {
-        body: { 
-          user_message: queryWithContext,
-          conversation_id: conversationId // Can be used server-side to boost same-conversation results
-        }
-      });
+      // Use invoke() with timeout to prevent PWA from hanging indefinitely
+      // If RAG takes too long, we gracefully return empty and continue without context
+      const { data, error } = await withTimeout(
+        supabase.functions.invoke('get-rag-context', {
+          body: {
+            user_message: queryWithContext,
+            conversation_id: conversationId // Can be used server-side to boost same-conversation results
+          }
+        }),
+        RAG_TIMEOUT_MS,
+        'RAG context fetch timed out'
+      );
 
       if (error) {
         console.error("🔴 RAG error:", error.message || error);
@@ -68,10 +86,11 @@ export const ragService = {
       if (data?.context) {
         console.log("🟢 RAG context found:", data.context.length, "chars");
       }
-      
+
       return data?.context || "";
     } catch (e: any) {
-      console.error("🔴 RAG exception:", e.message || e);
+      // Timeout or other error - gracefully return empty rather than hanging
+      console.warn("🟡 RAG unavailable:", e.message || e);
       return "";
     }
   },
