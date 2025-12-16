@@ -79,30 +79,30 @@ export const previewVoice = async (voiceName: string): Promise<string | null> =>
 };
 
 // Model-specific context window configurations
-// Smaller windows for expensive models to control costs
+// Balanced windows to maintain conversation coherence while managing costs
 const MODEL_CONTEXT_CONFIGS: Record<string, { maxMessages: number; maxContextChars: number; minRecentMessages: number }> = {
-  // Premium models - smaller context to control costs
-  'o1': { maxMessages: 10, maxContextChars: 16000, minRecentMessages: 4 },
-  'o1-mini': { maxMessages: 12, maxContextChars: 20000, minRecentMessages: 4 },
-  'gemini-3-pro-preview': { maxMessages: 14, maxContextChars: 24000, minRecentMessages: 6 },
-  'gemini-3.0-pro': { maxMessages: 14, maxContextChars: 24000, minRecentMessages: 6 }, // alias for compatibility
-  'gpt-5.2': { maxMessages: 16, maxContextChars: 28000, minRecentMessages: 6 },
-  'claude-opus-4-5': { maxMessages: 12, maxContextChars: 20000, minRecentMessages: 4 }, // Premium - most expensive
+  // Premium models - increased but still cost-conscious
+  'o1': { maxMessages: 16, maxContextChars: 30000, minRecentMessages: 8 },
+  'o1-mini': { maxMessages: 18, maxContextChars: 36000, minRecentMessages: 8 },
+  'gemini-3-pro-preview': { maxMessages: 22, maxContextChars: 42000, minRecentMessages: 10 },
+  'gemini-3.0-pro': { maxMessages: 22, maxContextChars: 42000, minRecentMessages: 10 },
+  'gpt-5.2': { maxMessages: 24, maxContextChars: 48000, minRecentMessages: 10 },
+  'claude-opus-4-5': { maxMessages: 18, maxContextChars: 36000, minRecentMessages: 8 },
   // Standard models - balanced context
-  'gpt-5-mini': { maxMessages: 20, maxContextChars: 32000, minRecentMessages: 6 },
-  'gemini-2.5-flash': { maxMessages: 24, maxContextChars: 40000, minRecentMessages: 6 },
-  'claude-sonnet-4-5': { maxMessages: 18, maxContextChars: 32000, minRecentMessages: 6 }, // Standard - balanced
-  'claude-haiku-4-5': { maxMessages: 24, maxContextChars: 40000, minRecentMessages: 6 }, // Standard - affordable
-  // Budget models - larger context is affordable
-  'gpt-5-nano': { maxMessages: 30, maxContextChars: 48000, minRecentMessages: 8 },
-  'gemini-flash-lite-latest': { maxMessages: 30, maxContextChars: 48000, minRecentMessages: 8 },
+  'gpt-5-mini': { maxMessages: 30, maxContextChars: 56000, minRecentMessages: 10 },
+  'gemini-2.5-flash': { maxMessages: 36, maxContextChars: 64000, minRecentMessages: 10 },
+  'claude-sonnet-4-5': { maxMessages: 28, maxContextChars: 50000, minRecentMessages: 10 },
+  'claude-haiku-4-5': { maxMessages: 36, maxContextChars: 64000, minRecentMessages: 10 },
+  // Budget models - generous context
+  'gpt-5-nano': { maxMessages: 45, maxContextChars: 72000, minRecentMessages: 12 },
+  'gemini-flash-lite-latest': { maxMessages: 45, maxContextChars: 72000, minRecentMessages: 12 },
 };
 
 // Default configuration for unknown models
 const DEFAULT_CONTEXT_CONFIG = {
-  maxMessages: 20,
-  maxContextChars: 32000,
-  minRecentMessages: 6,
+  maxMessages: 30,
+  maxContextChars: 50000,
+  minRecentMessages: 10,
 };
 
 /**

@@ -95,6 +95,13 @@ Key patterns:
 - Supabase Dashboard → Edge Functions for server-side logs
 - Verify realtime subscriptions: look for `[Realtime] Messages subscription status: SUBSCRIBED`
 
+### RAG/Vector Search Troubleshooting
+
+If RAG returns no results with error `operator does not exist: extensions.vector <=> extensions.vector`:
+- The pgvector extension is installed in the `extensions` schema
+- The `match_documents` function must have `SET search_path = public, extensions` to find the `<=>` operator
+- Fix: See migration `20251215_fix_vector_operator_schema.sql`
+
 ## File Handling
 
 Supports PDFs, ZIPs, images, text files. Max 25MB per file. Files stored in Supabase Storage `uploads` bucket.
