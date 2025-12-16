@@ -61,13 +61,24 @@ App.tsx manages all state via React hooks:
 - **Auth**: session, isAuthChecking
 - **Data**: chats, folders, activeChatId, openTabs
 - **Settings**: selectedModel, defaultModel, voiceName, useSearch, darkMode
-- **Sync**: unsyncedByChat (tracks offline changes)
+- **Sync**: unsyncedByChat (tracks offline changes), isOnline (network status)
+- **Realtime**: realtime subscription error/status tracking
 
 Key patterns:
 - localStorage hydration on load (prevents loading flash)
 - Refs for async operations to avoid stale closures
 - Lazy message loading per chat
 - Real-time Supabase subscriptions for cross-device sync
+- Network status detection with automatic re-sync when coming back online
+- Message queuing for unloaded chats (pendingRealtimeMessagesRef)
+- Exponential backoff retry logic for failed reconciliation (max 3 attempts)
+- Chat creation now blocks message send - if DB save fails, entire flow aborts
+
+Key refs used to avoid stale closures in realtime callbacks:
+- `activeChatIdRef` - current chat for routing realtime message updates
+- `pendingRealtimeMessagesRef` - queue messages for chats not yet loaded
+- `isLoadingDataRef` - prevent concurrent data loads
+- `loadingMessagesRef` - prevent concurrent message loads per chat
 
 ### Database Tables
 - `chat_sessions` - Chat metadata (title, folder, pinned, persona, model, search)
@@ -91,9 +102,58 @@ Key patterns:
 
 ## Testing & Debugging
 
-- Check browser console for prefixed logs: `[App]`, `[DB]`, `[Realtime]`, `🧠 RAG`
+### Console Logging Prefixes
+Monitor these console prefixes to track application health and behavior:
+
+| Prefix | Purpose | Example |
+|--------|---------|---------|
+| `[App]` | App state, network status, reconnection events | `[App] Network reconnected` |
+| `[DB]` | Database operations (CRUD) | `[DB] Chat created successfully` |
+| `[Realtime]` | Supabase real-time subscription events | `[Realtime] Messages subscription status: SUBSCRIBED` |
+| `🧠 RAG` | Vector search operations | `🟢 RAG context found: 1250 chars` |
+| `[Sync]` | Message/chat reconciliation and retry logic | `[Sync] Successfully reconciled chat...` |
+| `[Gemini]` | AI streaming response handling | `[Gemini] Total stream timeout exceeded` |
+| `🟡 RAG unavailable` | RAG timeout or unavailable state | `🟡 RAG unavailable: RAG context fetch timed out` |
+
+### Debugging Tools
+- Check browser console for the prefixes above to track request/response flow
 - Supabase Dashboard → Edge Functions for server-side logs
 - Verify realtime subscriptions: look for `[Realtime] Messages subscription status: SUBSCRIBED`
+- Network tab in DevTools: filter for `functions/v1/` to see Edge Function calls
+- Application tab → Storage → Local Storage for `lumi_*` cache keys
+
+### Timeout Configurations
+Understanding these timeouts helps diagnose hanging or slow responses:
+
+| Component | Timeout | Purpose |
+|-----------|---------|---------|
+| RAG context fetch | 10 seconds | Prevents RAG from blocking message sending in PWAs |
+| Streaming chunk | 30 seconds | Per-chunk timeout for AI response streaming |
+| Total stream | 5 minutes (300s) | Maximum time for complete AI response |
+
+If you see `🟡 RAG unavailable: RAG context fetch timed out`, the RAG system exceeded 10 seconds and was skipped. The message will still be sent without vector search context.
+
+### Sync & Reconciliation Troubleshooting
+
+The app automatically reconciles offline changes with exponential backoff (max 3 attempts):
+
+**Symptoms of sync issues:**
+- Messages sent offline don't appear on other devices after coming back online
+- Chat created on one device doesn't appear on another
+- `[Sync] Will retry chat...` appears repeatedly in console
+
+**How to debug:**
+1. Check network status: `[App] Network reconnected/disconnected` logs
+2. Verify Realtime subscriptions are active: `[Realtime] Messages subscription status: SUBSCRIBED`
+3. Look for reconciliation attempts: `[Sync] Successfully reconciled chat...`
+4. If retries are failing, check Supabase Dashboard for database errors
+5. Force a full reload to re-sync all data from server
+
+**Reconciliation retry logic:**
+- First attempt: immediate
+- Second attempt: 1 second delay
+- Third attempt: 2 seconds delay
+- If all fail, user sees retry prompt
 
 ### RAG/Vector Search Troubleshooting
 
@@ -101,6 +161,11 @@ If RAG returns no results with error `operator does not exist: extensions.vector
 - The pgvector extension is installed in the `extensions` schema
 - The `match_documents` function must have `SET search_path = public, extensions` to find the `<=>` operator
 - Fix: See migration `20251215_fix_vector_operator_schema.sql`
+
+**RAG performance optimization:**
+- Simple follow-up messages (yes/no, short questions) skip RAG to save API calls
+- RAG context is only fetched if message is > 2 chars and in active conversation
+- Retrieved documents are filtered by relevance threshold (configurable in function)
 
 ## File Handling
 
