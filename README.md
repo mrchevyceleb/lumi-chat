@@ -1,39 +1,161 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Lumi Chat
 
-# Run and deploy your AI Studio app
+A full-stack AI chat application with multi-model support, RAG memory, and real-time sync.
 
-This contains everything you need to run your app locally.
+![License](https://img.shields.io/badge/License-MIT-blue)
+![React](https://img.shields.io/badge/React-19.2-61dafb)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6)
+![Supabase](https://img.shields.io/badge/Supabase-Backend-3ecf8e)
 
-View your app in AI Studio: https://ai.studio/apps/drive/1-jLqQ7JH6ko1tO7UR8ol9uRM6NmmdOoO
+---
 
-## Run Locally
+## Features
 
-**Prerequisites:**  Node.js
+- **Multi-Model Support** - Gemini, GPT, and Claude models in one interface
+- **RAG Memory System** - Conversations saved to vector store for context retrieval
+- **Real-Time Sync** - Cross-device sync via Supabase subscriptions
+- **File Uploads** - Images, PDFs, ZIPs supported (25MB max)
+- **PWA Ready** - Install as a native app on any device
+- **Custom Personas** - Create AI personalities with custom system prompts
+- **Folder Organization** - Organize chats into folders
+- **Voice Output** - Text-to-speech for AI responses
+- **Offline Support** - Queue messages when offline, sync when back
 
+---
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Supported Models
 
-## PDF / ZIP handling
+| Provider | Models |
+|----------|--------|
+| Google | Gemini 2.5 Flash, Gemini 3 Pro |
+| OpenAI | GPT-5.2, GPT-5 Mini, GPT-5 Nano, o1, o1-mini |
+| Anthropic | Claude Haiku 4.5, Claude Sonnet 4.5, Claude Opus 4.5 |
 
-- Attachments now support images, PDF, ZIP (per-file), and small text files/snippets.
-- Files are uploaded to the private Supabase Storage bucket `uploads`; only minimal metadata is stored (no file contents) in `public.file_metadata` and `messages.file_metadata`.
-- Max upload size is 25MB per file. Unsupported items inside ZIPs are skipped with warnings.
-- Apply the new schema before use: `supabase db push`
-- Deploy the updated Edge Function: `supabase functions deploy gemini-chat`
-- Required env/secrets for the Edge Function: `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_URL`, and model provider keys (`GOOGLE_API_KEY`, `OPENAI_API_KEY`) available to the function runtime.
+---
 
-## Chat persistence sanity check
+## Tech Stack
 
-Use this quick manual pass to verify chats survive reloads and brief network hiccups:
+- **Frontend**: React 19.2, TypeScript 5.8, Vite 6, Tailwind CSS 4
+- **Backend**: Supabase (PostgreSQL + Auth + Edge Functions + Storage)
+- **Vector DB**: pgvector for RAG embeddings
+- **AI**: Server-side API calls via Edge Functions
 
-1) Sign in, start a new chat, send a short message.  
-2) Watch DevTools Network: `POST /rest/v1/chats` then `POST /rest/v1/messages` should return 200s.  
-3) Reload the page: the chat and messages should reappear immediately (from cache) and stay after server data loads.  
-4) Simulate a brief offline blip (toggle “Offline” in DevTools), send one message, then go back online. The message should remain visible and sync once the connection recovers (no disappearance on reload).  
-5) Check console for failures: look for `Failed to persist new chat/message` or auth errors; if seen, stay online and wait a few seconds for automatic reconciliation before reloading.
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Node.js 18+
+- Supabase account
+- API keys for AI providers (Gemini, OpenAI, and/or Anthropic)
+
+### 1. Clone and Install
+
+```bash
+git clone https://github.com/mrchevyceleb/lumi-chat.git
+cd lumi-chat
+npm install
+```
+
+### 2. Configure Supabase
+
+Create a Supabase project and run the migrations:
+
+```bash
+supabase link --project-ref YOUR_PROJECT_REF
+supabase db push
+```
+
+### 3. Set Environment Variables
+
+Create `.env.local`:
+
+```env
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+```
+
+### 4. Deploy Edge Functions
+
+```bash
+supabase secrets set GOOGLE_API_KEY=your-key
+supabase secrets set OPENAI_API_KEY=your-key
+supabase secrets set ANTHROPIC_API_KEY=your-key
+
+supabase functions deploy gemini-chat
+supabase functions deploy gemini-title
+supabase functions deploy gemini-tts
+supabase functions deploy get-rag-context
+supabase functions deploy embed-and-store-gemini-document
+```
+
+### 5. Run Locally
+
+```bash
+npm run dev
+```
+
+Open http://localhost:5173
+
+---
+
+## Deployment
+
+### Docker
+
+```bash
+npm run docker:build
+npm run docker:run
+```
+
+### Google Cloud Run
+
+```bash
+gcloud builds submit --config cloudbuild.yaml
+```
+
+---
+
+## Architecture
+
+```
+lumi-chat/
+├── components/       # React UI components
+├── services/         # Business logic
+│   ├── geminiService.ts   # AI streaming, title gen, TTS
+│   ├── dbService.ts       # Supabase CRUD operations
+│   └── ragService.ts      # Vector similarity search
+├── supabase/
+│   ├── functions/    # Edge Functions for AI proxying
+│   └── migrations/   # Database schema
+└── App.tsx           # Main state management
+```
+
+---
+
+## Key Features Explained
+
+### RAG Memory
+
+Conversations are embedded and stored in a vector database. When you chat, relevant past context is automatically retrieved and included, giving the AI long-term memory.
+
+### Context Windowing
+
+Each model has optimized token limits to control costs while maintaining quality. The system automatically manages context size.
+
+### Optimistic Updates
+
+Messages appear instantly in the UI before server confirmation. If the server fails, the UI handles rollback gracefully.
+
+---
+
+## License
+
+MIT License - feel free to use, modify, and distribute.
+
+---
+
+**Built by [Matt Johnston](https://mattjohnston.io)**
+
+*Part of the Vibe Marketing open source toolkit.*
