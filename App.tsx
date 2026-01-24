@@ -297,7 +297,8 @@ const App: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
   
   // Scroll State
-  const isAtBottomRef = useRef(true); 
+  const isAtBottomRef = useRef(true);
+  const userScrolledUpDuringStreamRef = useRef(false); 
 
   // --- Auth & Data Loading Effect ---
   useEffect(() => {
@@ -890,6 +891,17 @@ const App: React.FC = () => {
     if (chatContainerRef.current) {
       const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
       const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
+
+      // If user scrolls up while AI is streaming, remember their intent to stay scrolled up
+      if (isTyping && !isAtBottom && isAtBottomRef.current) {
+        userScrolledUpDuringStreamRef.current = true;
+      }
+
+      // If user scrolls back to bottom, allow auto-scroll to resume
+      if (isAtBottom && userScrolledUpDuringStreamRef.current) {
+        userScrolledUpDuringStreamRef.current = false;
+      }
+
       isAtBottomRef.current = isAtBottom;
       setShowScrollButton(!isAtBottom);
     }
@@ -902,12 +914,14 @@ const App: React.FC = () => {
   // Instant scroll on active chat change or reload
   useLayoutEffect(() => {
     isAtBottomRef.current = true;
+    userScrolledUpDuringStreamRef.current = false;
     scrollToBottom('auto'); // 'auto' ensures instant jump without animation
   }, [activeChatId]);
 
   // Smooth scroll for new messages (streaming/typing)
+  // Only auto-scroll if user hasn't intentionally scrolled up during streaming
   useEffect(() => {
-    if (isAtBottomRef.current) {
+    if (isAtBottomRef.current && !userScrolledUpDuringStreamRef.current) {
       scrollToBottom('smooth');
     }
   }, [chats, isTyping]);
@@ -1412,8 +1426,9 @@ const App: React.FC = () => {
     });
 
     isAtBottomRef.current = true;
+    userScrolledUpDuringStreamRef.current = false; // Reset scroll lock on new message
     setChats(updatedChats);
-    
+
     // Set Typing Status IMMEDIATELY to avoid "1 second delay" feeling
     // while RAG context is being fetched in background.
     setIsTyping(true);
